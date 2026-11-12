@@ -4877,8 +4877,8 @@ class App(tk.Tk):
             d.destroy()
             if res[0] == "error":
                 return messagebox.showerror(APP_NAME, "No se pudo descargar la actualización.\n{}".format(res[1]), parent=self)
+            self.cerrar()                                    # guarda borrador y datos antes de soltar el archivo
             actualizador.lanzar_instalador(res[1])
-            self.destroy()
         self.after(150, revisar)
 
     def ir(self, clave, animar=True):
