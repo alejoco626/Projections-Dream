@@ -56,6 +56,25 @@ class PruebaCampanas(unittest.TestCase):
         self.assertEqual(P.campana_mas_solicitada(rank)["campana"], "B")  # la de mas leads
 
 
+class PruebaVariosMeses(unittest.TestCase):
+    def test_reporte_combinado(self):
+        d = datos_base()
+        d["metas"]["2026-10"] = {"A": {"mes": 10000, "sem": None}}
+        d["metas"].pop("2026-11")
+        d["periodos"] = {"2026-10": [reg(1, "2026-10-05", 4000, "exitosa"), reg(2, "2026-10-06", 1000, "perdida", "Peru")],
+                         "2026-11": [reg(3, "2026-11-03", 6000, "exitosa"), reg(4, "2026-11-04", 2000, "activa", "Peru")]}
+        m = P.construir_reporte_multi(d, ["2026-11", "2026-10"], hoy=date(2026, 11, 15))
+        e = m["equipo"]
+        self.assertEqual((m["periodo"], len(m["semanas"])), ("Oct–Nov 2026", 2))
+        self.assertEqual((e["neto"], e["proy"], e["perdidas"], e["meta"]), (10000, 2000, 1000, 20000))
+        self.assertAlmostEqual(e["esp_monto"], 15000)       # octubre completo + mitad de noviembre
+
+    def test_etiquetas(self):
+        self.assertEqual(P.etiqueta_meses(["2026-%02d" % i for i in range(1, 13)]), "Todo 2026")
+        self.assertEqual(P.etiqueta_meses(["2026-01", "2026-03"]), "Ene, Mar 2026")
+        self.assertEqual(P.etiqueta_meses(["2026-02", "2026-03", "2026-04"]), "Feb–Abr 2026")
+
+
 class PruebaVersion(unittest.TestCase):
     def test_hay_version(self):
         self.assertRegex(P.VERSION_APP, r"^\d+\.\d+(\.\d+)?$")

@@ -53,6 +53,8 @@ BITRIX_DEAL_URL = "https://dreamtravel.bitrix24.es/crm/deal/details/{}/"
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
          "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
+MESES_ABR = [m[:3] for m in MESES]
+
 TIPOS_ORDEN = ["activa", "perdida", "exitosa"]
 TIPO_LABEL = {"activa": "Activa", "perdida": "Perdida", "exitosa": "Exitosa"}
 LABEL_TIPO = {v: k for k, v in TIPO_LABEL.items()}
@@ -529,6 +531,53 @@ def construir_reporte(datos, clave, modo, semana, hoy=None):
             "titulo": titulo, "creado": datetime.now().isoformat(timespec="seconds"),
             "filas": filas, "equipo": equipo, "esp": frac,
             "semanas": semanas, "campanas": ranking_campanas(regs)}
+
+
+def etiqueta_meses(claves):
+    """'Noviembre 2026', 'Ene–Mar 2026', 'Ene, Mar, Jun 2026' o 'Todo 2026' segun los meses elegidos."""
+    claves = sorted(claves)
+    if len(claves) == 1:
+        return nombre_periodo(claves[0])
+    anio = claves[0][:4]
+    idx = [int(c[5:7]) - 1 for c in claves]
+    if len(idx) == 12:
+        return "Todo " + anio
+    if idx == list(range(idx[0], idx[-1] + 1)):
+        return "{}–{} {}".format(MESES_ABR[idx[0]], MESES_ABR[idx[-1]], anio)
+    return "{} {}".format(", ".join(MESES_ABR[i] for i in idx), anio)
+
+
+def construir_reporte_multi(datos, claves, hoy=None):
+    """Reporte que une varios meses: metas, recibido y proyectado se suman; en lugar de semanas hay una columna por mes."""
+    claves = sorted(claves)
+    rs = [construir_reporte(datos, c, "Mes", None, hoy) for c in claves]
+    ids = vend_ids(datos)
+    regs = [r for c in claves for r in datos["periodos"].get(c, [])]
+    n = float(len(claves))
+    filas = []
+    for k, vid in enumerate(ids):
+        fs = [r["filas"][k] for r in rs]
+        meta = sum(f["meta"] for f in fs)
+        c = calcular_tarjeta([r for r in regs if r["vend"] == vid], meta)
+        esp = sum(f["esp_monto"] for f in fs)
+        c.update({"id": vid, "nombre": fs[0]["nombre"], "ci": fs[0]["ci"], "meta_mes": meta, "meta_sem": meta / n, "arrastre": 0.0})
+        filas.append(con_necesaria(con_ritmo(c, esp / meta if meta > 0 else 0.0)))
+        c["esp_monto"] = esp
+        c["ritmo"] = c["neto"] - esp
+    meta_eq = sum(f["meta"] for f in filas)
+    esp_eq = sum(f["esp_monto"] for f in filas)
+    frac = esp_eq / meta_eq if meta_eq > 0 else 0.0
+    equipo = con_necesaria(con_ritmo(calcular_tarjeta(regs, meta_eq), frac))
+    equipo["arrastre"] = 0.0
+    meses = []
+    for i, (c, r) in enumerate(zip(claves, rs), 1):
+        meses.append({"semana": i, "rango": None, "etq": MESES_ABR[int(c[5:7]) - 1], "equipo": r["equipo"],
+                      "filas": {f["id"]: f for f in r["filas"]}})
+    etq = etiqueta_meses(claves)
+    return {"version": 1, "clave": "+".join(claves), "claves": claves, "multi": True, "periodo": etq, "vista": "Mes",
+            "semana": None, "titulo": "{} · Meses combinados".format(etq),
+            "creado": datetime.now().isoformat(timespec="seconds"), "filas": filas, "equipo": equipo, "esp": frac,
+            "semanas": meses, "campanas": ranking_campanas(regs)}
 
 
 def buscar_duplicados(datos, lead, vid, campana, excluir_id=None):
@@ -1246,11 +1295,12 @@ def _falta_tile(c):
     return "Superó la meta por", fm0(-c["falta_neto"]), AZUL_MED, AZUL_MED
 
 
-def _grafico_semanas(pdf, x, y, w, h, semanas, getc, destacada, meta_sem):
+def _grafico_semanas(pdf, x, y, w, h, semanas, getc, destacada, meta_sem, rotulo="Meta semanal"):
     """Barras apiladas por semana: recibido (azul) + proyectado (azul claro) y linea de meta semanal."""
     base = y + h - 24
     alto = h - 24 - 22
-    mx = max([getc(s)["neto"] + getc(s)["proy"] for s in semanas] + [meta_sem, 1.0]) * 1.12
+    mensual = rotulo != "Meta semanal"                 # vista de varios meses: la etiqueta de la meta va arriba, con espacio
+    mx = max([getc(s)["neto"] + getc(s)["proy"] for s in semanas] + [meta_sem, 1.0]) * (1.34 if mensual else 1.12)
     n = len(semanas)
     gw = w / float(n)
     for i, s in enumerate(semanas):
@@ -1269,12 +1319,16 @@ def _grafico_semanas(pdf, x, y, w, h, semanas, getc, destacada, meta_sem):
                 if th - nh > 6:
                     pdf.rect(bx, base - nh, bw, min(8, nh), AZUL)
             pdf.text(bx + bw / 2.0, base - th - 6, fm0(c["neto"] + c["proy"]), 8.5, True, INK, "c")
-        pdf.text(gx + gw / 2.0, base + 16, "S{}".format(s["semana"]), 10, bool(destacada and s["semana"] == destacada), INK, "c")
+        pdf.text(gx + gw / 2.0, base + 16, s.get("etq") or "S{}".format(s["semana"]), 10, bool(destacada and s["semana"] == destacada), INK, "c")
     pdf.line(x, base, x + w, base, "#B8C4D0", 1)
     if meta_sem > 0:
         ym = base - alto * meta_sem / mx
         pdf.line(x, ym, x + w, ym, INK, 1.2, (5, 3))
-        pdf.text(x + w, ym - 5, "Meta semanal " + fm0(meta_sem), 9, True, INK, "r")
+        if mensual:
+            pdf.line(x + w - 170, y + 7, x + w - 150, y + 7, INK, 1.2, (5, 3))
+            pdf.text(x + w, y + 11, rotulo + " " + fm0(meta_sem), 9, True, INK, "r")
+        else:
+            pdf.text(x + w, ym - 5, rotulo + " " + fm0(meta_sem), 9, True, INK, "r")
 
 
 def _leyenda(pdf, x, y):
@@ -1289,7 +1343,7 @@ def _slide_portada(pdf, m):
     pdf.rect(0, 0, 16, PDF.H, CORINTO)
     pdf.text(70, 150, "REPORTE DE PROYECCIONES", 14, True, AZUL_CLARO)
     pdf.text(70, 225, m["periodo"], 58, True, "#FFFFFF", maxw=820)
-    sub = ("Mes completo" if m["vista"] == "Mes" else
+    sub = ("Meses combinados" if m.get("multi") else "Mes completo" if m["vista"] == "Mes" else
            "Semana {}  ·  días {} al {}".format(m["semana"], *m["semanas"][m["semana"] - 1]["rango"]))
     pdf.text(70, 265, sub, 22, False, "#D6E4F0")
     e = m["equipo"]
@@ -1536,7 +1590,7 @@ def _slide_vendedor(pdf, m, f):
         _kpi(pdf, x0, 226, w, 106, "Meta mensual", fm0(f["meta_mes"]) if f["meta_mes"] > 0 else "—", "", INK, INK)
         _kpi(pdf, x0 + (w + 12), 226, w, 106, "Meta semanal", fm0(f["meta_sem"]) if f["meta_sem"] > 0 else "—", "", INK, INK)
     _kpi(pdf, x0 + 2 * (w + 12), 226, w, 106, "Perdidas", fm0(f["perdidas"]), "{} negociaciones".format(f["n_perdidas"]), CORINTO, CORINTO)
-    pdf.text(48, 358, "Semana por semana", 12, True, AZUL)
+    pdf.text(48, 358, "Mes por mes" if m.get("multi") else "Semana por semana", 12, True, AZUL)
     if f["meta"] > 0:
         if f["neto"] >= f["meta"]:
             nota = "Meta lograda"
@@ -1548,24 +1602,27 @@ def _slide_vendedor(pdf, m, f):
         pdf.text(190, 358, nota, 9.5, False, MUTED, maxw=540)
     _leyenda(pdf, 740, 358)
     pdf.rrect(48, 368, 864, 134, 16, CARD, BORDE)
-    _grafico_semanas(pdf, 64, 378, 832, 120, m["semanas"], lambda s, vid=f["id"]: s["filas"][vid], m["semana"], f["meta_sem"])
+    _grafico_semanas(pdf, 64, 378, 832, 120, m["semanas"], lambda s, vid=f["id"]: s["filas"][vid], m["semana"], f["meta_sem"],
+                     "Meta mensual (prom.)" if m.get("multi") else "Meta semanal")
     _pie(pdf, m)
 
 
 def _slide_semanas(pdf, m):
-    _cabecera(pdf, "Semana por semana", m["titulo"] + "  ·  equipo")
-    meta_sem = m["semanas"][0]["equipo"]["meta"]
+    multi = m.get("multi")
+    _cabecera(pdf, "Mes por mes" if multi else "Semana por semana", m["titulo"] + "  ·  equipo")
+    meta_sem = (sum(s["equipo"]["meta"] for s in m["semanas"]) / len(m["semanas"])) if multi else m["semanas"][0]["equipo"]["meta"]
     _leyenda(pdf, 740, 112)
     pdf.rrect(48, 122, 864, 178, 16, CARD, BORDE)
-    _grafico_semanas(pdf, 64, 128, 832, 166, m["semanas"], lambda s: s["equipo"], m["semana"], meta_sem)
+    _grafico_semanas(pdf, 64, 128, 832, 166, m["semanas"], lambda s: s["equipo"], m["semana"], meta_sem,
+                     "Meta mensual (prom.)" if multi else "Meta semanal")
     n = len(m["semanas"])
     x0, cw = 48 + 140, (864 - 140) / float(n)
     y = 312
     pdf.rrect(48, y, 864, 28, 10, AZUL)
-    pdf.text(62, y + 19, "Semana", 10, True, "#FFFFFF")
+    pdf.text(62, y + 19, "Mes" if multi else "Semana", 10, True, "#FFFFFF")
     for i, s in enumerate(m["semanas"]):
-        pdf.text(x0 + cw * (i + 0.5), y + 19, "S{}  ({}–{})".format(s["semana"], *s["rango"]), 10, True, "#FFFFFF", "c")
-    filas = [("Meta de la semana", lambda c: fm0(c["meta"]) if c["meta"] > 0 else "—", INK),
+        pdf.text(x0 + cw * (i + 0.5), y + 19, s["etq"] if multi else "S{}  ({}–{})".format(s["semana"], *s["rango"]), 10, True, "#FFFFFF", "c")
+    filas = [("Meta del mes" if multi else "Meta de la semana", lambda c: fm0(c["meta"]) if c["meta"] > 0 else "—", INK),
              ("Arrastre", lambda c: ("+" if c["arrastre"] > 0 else "-") + fm0(abs(c["arrastre"])) if abs(c["arrastre"]) >= 0.5 else "—", MUTED),
              ("Recibido", lambda c: fm0(c["neto"]), AZUL), ("Proyectado", lambda c: fm0(c["proy"]), INK),
              ("% de la meta", lambda c: pct0(c["neto"], c["meta"]), INK)]
@@ -2174,7 +2231,7 @@ def anillo(cv, cx, cy, r, ancho, fn, fp, esp=None):
                        fill=CORINTO, width=3, capstyle="round")
 
 
-def dibujar_semanas(cv, x, y, w, h, sem, destacada, meta_sem):
+def dibujar_semanas(cv, x, y, w, h, sem, destacada, meta_sem, etq=None):
     """Mini columnas por semana: neto (azul) + proyectado (azul claro) apilados y linea de meta semanal."""
     n = len(sem)
     if n == 0:
@@ -2196,7 +2253,7 @@ def dibujar_semanas(cv, x, y, w, h, sem, destacada, meta_sem):
             rrect(cv, bx, base - nh, bx + bw, base, min(5, bw / 2.0), fill=AZUL, outline="")
             if th - nh > 5:
                 cv.create_rectangle(bx, base - nh, bx + bw, base - max(nh - 5, 0), fill=AZUL, outline="")
-        cv.create_text(gx + cw / 2.0, base + 9, text="S{}".format(i + 1), font=F["mini"],
+        cv.create_text(gx + cw / 2.0, base + 9, text=etq[i] if etq else "S{}".format(i + 1), font=F["mini"],
                        fill=AZUL if destacada == i + 1 else MUTED)
     if meta_sem > 0:
         ym = base - zona * meta_sem / mx
@@ -2233,7 +2290,7 @@ def pastel(cv, cx, cy, r, partes, k=1.0):
         a += 360.0 * fr * k
 
 
-def dibujar_acumulada(cv, x, y, w, h, sem, meta, destacada=None):
+def dibujar_acumulada(cv, x, y, w, h, sem, meta, destacada=None, etq=None):
     """Lineas acumuladas por semana: recibido (azul) y recibido + proyectado (azul claro) contra el ritmo de la meta (corinto)."""
     n = len(sem)
     if n == 0:
@@ -2250,7 +2307,7 @@ def dibujar_acumulada(cv, x, y, w, h, sem, meta, destacada=None):
     py = lambda v: base - alto * v / mx
     cv.create_line(x, base, x + w, base, fill="#B8C4D0")
     for k in range(1, n + 1):
-        cv.create_text(px(k), base + 8, text="S{}".format(k), font=F["mini"], fill=AZUL if destacada == k else MUTED)
+        cv.create_text(px(k), base + 8, text=etq[k - 1] if etq else "S{}".format(k), font=F["mini"], fill=AZUL if destacada == k else MUTED)
     if meta > 0:
         cv.create_line(px(0), base, px(n), py(meta), fill=CORINTO, width=2, dash=(4, 3))
         cv.create_text(px(n), py(meta) - 8, text="Meta " + fm0(meta), anchor="e", font=F["mini"], fill=CORINTO)
@@ -2394,7 +2451,7 @@ def dibujar_vendedor(cv, w, h, d, vis):
                 rrect(cv, w * esp - 1.5, 60, w * esp + 1.5, 90, 1.5, fill=CORINTO, outline="")
             ytxt = 108
         else:   # acumulada
-            dibujar_acumulada(cv, 0, 28, w, 88, vis["sem"], d.get("meta_mes", meta), d["destacada"])
+            dibujar_acumulada(cv, 0, 28, w, 88, vis["sem"], d.get("meta_mes", meta), d["destacada"], d.get("etq"))
             ytxt = 124
         cw = w / 3.0
         for i, (lab, val, marca, col) in enumerate(stats):
@@ -2406,7 +2463,7 @@ def dibujar_vendedor(cv, w, h, d, vis):
         bloque_ritmo(cv, w, 158, esp, vis["neto"], d.get("esp_monto", 0.0), meta)
     cv.create_line(0, 242, w, 242, fill=BORDE)
     cv.create_text(0, 254, text="Por semana", anchor="w", font=F["peq"], fill=MUTED)
-    dibujar_semanas(cv, 0, 266, w, 56, vis["sem"], d["destacada"], d["meta_sem"])
+    dibujar_semanas(cv, 0, 266, w, 56, vis["sem"], d["destacada"], d["meta_sem"], d.get("etq"))
 
 
 def _embudo_barras(cv, w, h, etapas, perdidas, por_monto, k):
@@ -2628,22 +2685,118 @@ class Pagina(tk.Frame):
 
 
 class FiltroTiempo(tk.Frame):
-    """Boton Mes/Semana (muestra la vista actual; al presionarlo cambia) + selector de semana."""
+    """Boton Mes/Semana (muestra la vista actual; al presionarlo cambia) + selector de semana.
+    Con varios meses elegidos solo hay vista de mes, asi que el boton se cambia por una nota."""
 
     def __init__(self, master, app):
         super().__init__(master, bg=BG)
         self.app = app
-        tk.Label(self, text="Ver por", bg=BG, fg=MUTED, font=F["base"]).pack(side="left", padx=(0, E(8)))
-        Boton(self, app, "", app.toggle_modo, "primario", textvariable=app.var_modo, ancho=100).pack(side="left")
+        self.lbl = tk.Label(self, text="Ver por", bg=BG, fg=MUTED, font=F["base"])
+        self.btn = Boton(self, app, "", app.toggle_modo, "primario", textvariable=app.var_modo, ancho=100)
         self.cb = Campo(self, app, app.var_sem, ancho=178, valores=[], solo_lectura=True)
         self.cb.bind("<<ComboboxSelected>>", lambda e: app.notificar(guardar=False))
+        self.nota = tk.Label(self, bg=BG, fg=AZUL, font=F["bold"])
 
     def sincronizar(self):
-        self.cb["values"] = self.app.etiquetas_semanas()
-        if self.app.var_modo.get() == "Semana":
+        a = self.app
+        for w in (self.lbl, self.btn, self.cb, self.nota):
+            w.pack_forget()
+        if a.es_multi:
+            a.var_modo.set("Mes")
+            self.nota.config(text="Meses combinados · {}".format(a.resumen_meses()))
+            self.nota.pack(side="left")
+            return
+        self.lbl.pack(side="left", padx=(0, E(8)))
+        self.btn.pack(side="left")
+        self.cb["values"] = a.etiquetas_semanas()
+        if a.var_modo.get() == "Semana":
             self.cb.pack(side="left", padx=(E(8), 0))
-        else:
-            self.cb.pack_forget()
+
+
+class SelectorMeses(Campo):
+    """Lista de meses con casillas: se pueden marcar varios, o todos de una vez. Se ve como un campo mas."""
+
+    def __init__(self, master, app, ancho=188):
+        self.var_txt = tk.StringVar(value=app.resumen_meses())
+        super().__init__(master, app, self.var_txt, ancho=ancho, valores=[], solo_lectura=True)
+        self.pop = None
+
+    def refrescar_texto(self):
+        self.var_txt.set(self.app.resumen_meses())
+
+    def _abrir_menu(self):
+        if self.pop is not None:
+            return self._cerrar()
+        app = self.app
+        p = self.pop = tk.Toplevel(self)
+        p.overrideredirect(True)
+        p.configure(bg=BORDE)
+        cuerpo = tk.Frame(p, bg=CARD)
+        cuerpo.pack(padx=1, pady=1)
+        tk.Label(cuerpo, text="Meses de " + app.var_anio.get(), bg=CARD, fg=MUTED, font=F["peq_b"]).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=E(14), pady=(E(10), E(2)))
+        self.v_todos = tk.BooleanVar(value=len(app.meses_sel) == 12)
+        self.v_mes = [tk.BooleanVar(value=i in app.meses_sel) for i in range(12)]
+        ck = _check(cuerpo, "Todos los meses", self.v_todos, bg=CARD)
+        ck.configure(font=F["bold"], command=self._todos)
+        ck.grid(row=1, column=0, columnspan=2, sticky="we", padx=E(10), pady=(0, E(4)))
+        for i, nombre in enumerate(MESES):
+            c = _check(cuerpo, nombre, self.v_mes[i], bg=CARD)
+            c.configure(command=self._cambio, width=11)
+            c.grid(row=2 + i % 6, column=i // 6, sticky="we", padx=(E(10), E(4)), pady=E(1))
+        fila = tk.Frame(cuerpo, bg=CARD)
+        fila.grid(row=8, column=0, columnspan=2, sticky="we", padx=E(12), pady=(E(8), E(10)))
+        Boton(fila, app, "Solo el mes actual", self._hoy, "suave", bg=CARD, alto=30).pack(side="left")
+        Boton(fila, app, "Listo", self._cerrar, "primario", bg=CARD, alto=30).pack(side="right")
+        p.update_idletasks()
+        p.geometry("+{}+{}".format(self.winfo_rootx(), self.winfo_rooty() + self._alto + E(4)))
+        p.bind("<Escape>", lambda e: self._cerrar())
+        p.bind("<Button-1>", self._fuera)
+        try:
+            p.grab_set()
+            p.focus_force()
+        except tk.TclError:
+            pass
+
+    def _fuera(self, e):
+        p = self.pop
+        if p is not None and not (0 <= e.x_root - p.winfo_rootx() <= p.winfo_width()
+                                  and 0 <= e.y_root - p.winfo_rooty() <= p.winfo_height()):
+            self._cerrar()
+
+    def _cerrar(self):
+        p, self.pop = self.pop, None
+        if p is not None:
+            try:
+                p.grab_release()
+            except tk.TclError:
+                pass
+            p.destroy()
+
+    def _todos(self):
+        marcar = self.v_todos.get()
+        for i, v in enumerate(self.v_mes):
+            v.set(marcar or i == self._primario())
+        self._cambio()
+
+    def _primario(self):
+        return MESES.index(self.app.var_mes.get())
+
+    def _hoy(self):
+        hoy = date.today()
+        self.app.var_anio.set(str(hoy.year))
+        for i, v in enumerate(self.v_mes):
+            v.set(i == hoy.month - 1)
+        self._cambio()
+
+    def _cambio(self):
+        sel = {i for i, v in enumerate(self.v_mes) if v.get()}
+        if not sel:                                  # siempre debe quedar al menos un mes
+            sel = {self._primario()}
+            self.v_mes[self._primario()].set(True)
+        self.v_todos.set(len(sel) == 12)
+        self.app.poner_meses(sel)
+        self.refrescar_texto()
 
 
 class KpiTile(Tarjeta):
@@ -2786,11 +2939,11 @@ class TarjetaVendedor(TarjetaGrafica):
         return {"neto": lerp(a["neto"], b["neto"], p), "proy": lerp(a["proy"], b["proy"], p),
                 "sem": [(lerp(x0, x1, p), lerp(y0, y1, p)) for (x0, y0), (x1, y1) in zip(sa, b["sem"])]}
 
-    def actualizar(self, nombre, ci, c, semanas, destacada, meta_sem, esp=None):
+    def actualizar(self, nombre, ci, c, semanas, destacada, meta_sem, esp=None, etq=None):
         self.d = {"nombre": nombre, "ci": ci, "meta": c["meta"], "destacada": destacada, "meta_sem": meta_sem,
                   "esp": esp if c["meta"] > 0 else None, "esp_monto": c.get("esp_monto", 0.0),
                   "meta_mes": c.get("meta_mes", c["meta"]), "tipo": self.app.grafica("panel"),
-                  "arrastre": c.get("arrastre", 0.0)}
+                  "arrastre": c.get("arrastre", 0.0), "etq": etq}
         self.animar({"neto": c["neto"], "proy": c["proy"], "sem": [(n, p) for n, p in semanas]})
 
     def pintar(self, cv, w, h):
@@ -2935,14 +3088,14 @@ class PaginaPanel(Pagina):
         a = self.app
         self.ft.sincronizar()
         modo, sem = a.var_modo.get(), a.semana_num()
-        m = construir_reporte(a.datos, a.clave(), modo, sem)
+        m = a.reporte(modo, sem)
         self.sub.config(text=m["titulo"])
         if tuple(a.vend_ids()) != self.orden:
             self._reconstruir(a.vend_ids())
         e = m["equipo"]
         top = m["campanas"][0] if m["campanas"] and m["campanas"][0]["neto"] > 0 else None
         arr = e.get("arrastre", 0.0)
-        sub_meta = "mensual" if modo == "Mes" else "semanal"
+        sub_meta = "de los meses elegidos" if m.get("multi") else "mensual" if modo == "Mes" else "semanal"
         if abs(arr) >= 0.5:
             sub_meta += " · {}{} de semanas anteriores".format("+" if arr > 0 else "−", fm0(abs(arr)))
         self.k[0].set("Meta del equipo", e["meta"] if e["meta"] > 0 else "Sin meta", sub_meta)
@@ -2962,7 +3115,8 @@ class PaginaPanel(Pagina):
             card = self.cards.get(f["id"])
             if card:
                 semanas = [(s["filas"][f["id"]]["neto"], s["filas"][f["id"]]["proy"]) for s in m["semanas"]]
-                card.actualizar(f["nombre"], f["ci"], f, semanas, m["semana"], f["meta_sem"], m["esp"])
+                card.actualizar(f["nombre"], f["ci"], f, semanas, m["semana"], f["meta_sem"], m["esp"],
+                                [x["etq"] for x in m["semanas"]] if m.get("multi") else None)
 
 
 def columnas_para(n):
@@ -3024,13 +3178,13 @@ class PaginaCampanas(Pagina):
         if self.var_v.get() not in nombres:
             self.var_v.set(TODOS)
         modo, sem = a.var_modo.get(), a.semana_num()
-        regs = filtrar_tiempo(a.registros, a.clave(), modo, sem)
+        regs = a.registros_filtrados(modo, sem)
         if self.var_v.get() != TODOS:
             vid = a.id_por_nombre(self.var_v.get())
             regs = [r for r in regs if r["vend"] == vid]
         self.rank = ranking_campanas(regs)
         self.total = sum(e["neto"] for e in self.rank)
-        cuando = nombre_periodo(a.clave()) + (" · Semana {}".format(sem) if modo == "Semana" else " · Mes completo")
+        cuando = a.etiqueta_periodo() + (" · Semana {}".format(sem) if modo == "Semana" else " · Meses combinados" if a.es_multi else " · Mes completo")
         self.sub.config(text=cuando + ("" if self.var_v.get() == TODOS else " · " + self.var_v.get()))
         top = campana_mas_solicitada(self.rank)
         if top is None:
@@ -3068,7 +3222,7 @@ class PaginaEmbudos(Pagina):
         a = self.app
         self.ft.sincronizar()
         modo, sem = a.var_modo.get(), a.semana_num()
-        self.sub.config(text=nombre_periodo(a.clave()) + (" · Semana {}".format(sem) if modo == "Semana" else " · Mes completo"))
+        self.sub.config(text=a.etiqueta_periodo() + (" · Semana {}".format(sem) if modo == "Semana" else " · Meses combinados" if a.es_multi else " · Mes completo"))
         vids = ["TOTAL"] + a.vend_ids()
         if tuple(vids) != self.orden:
             self.scroll.vaciar()
@@ -3080,7 +3234,7 @@ class PaginaEmbudos(Pagina):
                 c = TarjetaEmbudo(self.scroll.inner, a)
                 c.grid(row=i // 2, column=i % 2, sticky="nsew", padx=E(6), pady=E(6))
                 self.cards[vid] = c
-        regs = filtrar_tiempo(a.registros, a.clave(), modo, sem)
+        regs = a.registros_filtrados(modo, sem)
         for vid, card in self.cards.items():
             vr = regs if vid == "TOTAL" else [r for r in regs if r["vend"] == vid]
             nombre = "Equipo (todos)" if vid == "TOTAL" else a.nombre(vid)
@@ -3663,7 +3817,7 @@ class DialogoExportar(tk.Toplevel):
         self.transient(app)
         an, al = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry("{}x{}".format(min(E(1060), an - 60), min(E(690), al - 100)))
-        self.alcances = ["Periodo actual ({})".format(nombre_periodo(app.clave())), "Todos los periodos"]
+        self.alcances = ["Periodos elegidos ({})".format(app.etiqueta_periodo()), "Todos los periodos"]
         self.var_fmt = tk.StringVar(value=self.FORMATOS[0])
         self.var_alc = tk.StringVar(value=self.alcances[0])
         self.v_tipo = {t: tk.BooleanVar(value=True) for t in TIPOS_ORDEN}
@@ -3738,7 +3892,7 @@ class DialogoExportar(tk.Toplevel):
 
     def _claves(self):
         if self.var_alc.get() == self.alcances[0]:
-            return [self.app.clave()]
+            return self.app.claves()
         return sorted(self.app.datos["periodos"])
 
     def _tipos(self):
@@ -3796,7 +3950,7 @@ class DialogoExportar(tk.Toplevel):
             return messagebox.showinfo(APP_NAME, "No hay filas con esa selección.", parent=self)
         ext = (".xlsx", ".csv", ".json")[self._fmt()]
         tipo = [("Excel", "*.xlsx"), ("CSV", "*.csv"), ("JSON", "*.json")][self._fmt()]
-        base = "proyecciones_" + (norm(nombre_periodo(a.clave())).replace(" ", "_") if self.var_alc.get() == self.alcances[0] else "todos")
+        base = "proyecciones_" + (norm(a.etiqueta_periodo()).replace(" ", "_").replace("–", "-").replace(",", "") if self.var_alc.get() == self.alcances[0] else "todos")
         ruta = filedialog.asksaveasfilename(parent=self, defaultextension=ext, filetypes=[tipo], initialfile=base + ext)
         if not ruta:
             return
@@ -4175,12 +4329,13 @@ class PaginaHistorial(Pagina):
 
     def refrescar(self):
         a = self.app
-        self.sub.config(text=nombre_periodo(a.clave()))
+        self.sub.config(text=a.etiqueta_periodo())
+        regs_v = a.registros_vista
         self.cb_fvend["values"] = [TODOS] + a.nombres_lista()
         if self.var_fvend.get() not in self.cb_fvend["values"]:
             self.var_fvend.set(TODOS)
-        vals = [TODAS] + sorted({r["campana"] for r in a.registros if r["campana"]})
-        if any(not r["campana"] for r in a.registros):
+        vals = [TODAS] + sorted({r["campana"] for r in regs_v if r["campana"]})
+        if any(not r["campana"] for r in regs_v):
             vals.append(SIN_CAMP)
         self.cb_fcamp["values"] = vals
         if self.var_fcamp.get() not in vals:
@@ -4190,7 +4345,7 @@ class PaginaHistorial(Pagina):
         a.configurar_tags(self.res)
         sel_previa = set(self.tree.selection())
         texto, vend, camp, tipo = self.filtros_actuales()
-        filas = self._ordenar(filtrar(a.registros, a.nombres, texto, vend, camp, tipo))
+        filas = self._ordenar(filtrar(regs_v, a.nombres, texto, vend, camp, tipo))
         self.tree.delete(*self.tree.get_children())
         suma = 0.0
         for pos, r in filas:
@@ -4208,9 +4363,9 @@ class PaginaHistorial(Pagina):
             self.tree.heading(cid, text=titulo + flecha)
         por = {t: sum(r["monto"] for _, r in filas if r["tipo"] == t) for t in TIPOS_ORDEN}
         self.lbl_estado.config(text="Mostrando {} de {}  ·  Total {}  ({})".format(
-            len(filas), len(a.registros), fm(suma), " · ".join("{} {}".format(TIPO_LABEL[t], fm(por[t])) for t in TIPOS_ORDEN)))
+            len(filas), len(regs_v), fm(suma), " · ".join("{} {}".format(TIPO_LABEL[t], fm(por[t])) for t in TIPOS_ORDEN)))
 
-        res = resumir(a.registros, a.vend_ids())
+        res = resumir(regs_v, a.vend_ids())
         a.configurar_tags(self.res)
         self.res.delete(*self.res.get_children())
         for k in a.vend_ids() + ["TOTAL"]:
@@ -4257,7 +4412,7 @@ class PaginaHistorial(Pagina):
         sel = set(self._seleccion())
         if not sel:
             return
-        for r in self.app.registros:
+        for r in self.app.registros_vista:
             if r["id"] in sel:
                 r["tipo"] = tipo
         self.app.notificar()
@@ -4275,8 +4430,11 @@ class PaginaHistorial(Pagina):
         sel = self._seleccion()
         if not sel:
             return
-        r = next((x for x in self.app.registros if x["id"] == sel[0]), None)
+        r = next((x for x in self.app.registros_vista if x["id"] == sel[0]), None)
         if r:
+            clave = next((c for c, lst in self.app.datos["periodos"].items() if r in lst), None)
+            if clave:
+                self.app.var_mes.set(MESES[int(clave[5:7]) - 1])     # el formulario guarda en el mes principal
             self.app.ir("ingreso")
             self.app.pages["ingreso"].cargar(r)
 
@@ -4284,7 +4442,7 @@ class PaginaHistorial(Pagina):
         sel = self._seleccion()
         if not sel:
             return
-        r = next((x for x in self.app.registros if x["id"] == sel[0]), None)
+        r = next((x for x in self.app.registros_vista if x["id"] == sel[0]), None)
         if r and r["lead"].lower().startswith("http"):
             webbrowser.open(r["lead"])
         else:
@@ -4331,7 +4489,8 @@ class App(tk.Tk):
         self.papelera = None   # ultima eliminacion, para poder deshacerla
 
         hoy = date.today()
-        self.var_mes = tk.StringVar(value=MESES[hoy.month - 1])
+        self.var_mes = tk.StringVar(value=MESES[hoy.month - 1])      # mes "principal": donde se ingresa y se ponen metas
+        self.meses_sel = {hoy.month - 1}                              # meses que se miran (uno o varios)
         self.var_anio = tk.StringVar(value=str(hoy.year))
         self.var_modo = tk.StringVar(value="Mes")
         self.var_sem = tk.StringVar()
@@ -4389,6 +4548,45 @@ class App(tk.Tk):
     def registros(self):
         return self.datos["periodos"].setdefault(self.clave(), [])
 
+    # ---- meses elegidos (uno o varios)
+    @property
+    def es_multi(self):
+        return len(self.meses_sel) > 1
+
+    def claves(self):
+        a = int(self.var_anio.get())
+        return [clave_periodo(a, i) for i in sorted(self.meses_sel)]
+
+    def etiqueta_periodo(self):
+        return etiqueta_meses(self.claves())
+
+    def resumen_meses(self):
+        if len(self.meses_sel) == 12:
+            return "Todos los meses"
+        nombres = [MESES[i] if len(self.meses_sel) == 1 else MESES_ABR[i] for i in sorted(self.meses_sel)]
+        return ", ".join(nombres) if len(nombres) <= 3 else "{} meses".format(len(nombres))
+
+    def poner_meses(self, sel):
+        self.meses_sel = set(sel)
+        if MESES.index(self.var_mes.get()) not in self.meses_sel:
+            self.var_mes.set(MESES[min(self.meses_sel)])
+        self.cambiar_periodo()
+
+    @property
+    def registros_vista(self):
+        """Proyecciones de todos los meses elegidos (las mismas listas de siempre, sin copiar los registros)."""
+        return [r for c in self.claves() for r in self.datos["periodos"].get(c, [])]
+
+    def registros_filtrados(self, modo, sem):
+        if self.es_multi:
+            return self.registros_vista
+        return filtrar_tiempo(self.registros, self.clave(), modo, sem)
+
+    def reporte(self, modo, sem):
+        if self.es_multi:
+            return construir_reporte_multi(self.datos, self.claves())
+        return construir_reporte(self.datos, self.clave(), modo, sem if modo == "Semana" else None)
+
     def etiquetas_semanas(self):
         return ["Semana {} ({}–{})".format(i, a, b) for i, (a, b) in enumerate(rangos_semanas(self.clave()), 1)]
 
@@ -4410,6 +4608,8 @@ class App(tk.Tk):
 
     def cambiar_periodo(self):
         self.pages["ingreso"].cancelar_edicion()
+        if hasattr(self, "sel_meses"):
+            self.sel_meses.refrescar_texto()
         self.var_sem.set(self.semana_defecto())
         self.notificar(guardar=False)
 
@@ -4453,19 +4653,22 @@ class App(tk.Tk):
 
     # ---- eliminar / deshacer
     def eliminar_registros(self, ids):
-        """Elimina del periodo actual y guarda copia para 'Deshacer'. Devuelve cuantas elimino."""
+        """Elimina de cualquier periodo y guarda copia para 'Deshacer'. Devuelve cuantas elimino."""
         ids = set(ids)
-        clave = self.clave()
-        regs = self.datos["periodos"].setdefault(clave, [])
-        borrados = [(i, r) for i, r in enumerate(regs) if r["id"] in ids]
-        if not borrados:
+        borrados_por = {}
+        for clave, regs in self.datos["periodos"].items():
+            borrados = [(i, r) for i, r in enumerate(regs) if r["id"] in ids]
+            if borrados:
+                borrados_por[clave] = borrados
+        if not borrados_por:
             return 0
-        self.papelera = {"tipo": "registros", "regs": {clave: borrados}}
-        self.datos["periodos"][clave] = [r for r in regs if r["id"] not in ids]
+        self.papelera = {"tipo": "registros", "regs": borrados_por}
+        for clave in borrados_por:
+            self.datos["periodos"][clave] = [r for r in self.datos["periodos"][clave] if r["id"] not in ids]
         if self.pages["ingreso"].editando in ids:
             self.pages["ingreso"].cancelar_edicion()
         self.notificar()
-        return len(borrados)
+        return sum(len(v) for v in borrados_por.values())
 
     def eliminar_vendedor(self, vid):
         """Elimina al vendedor con sus proyecciones y metas (todo recuperable con 'Deshacer')."""
@@ -4508,7 +4711,7 @@ class App(tk.Tk):
     # ---- reportes
     def modelo_actual(self):
         modo = self.var_modo.get()
-        return construir_reporte(self.datos, self.clave(), modo, self.semana_num() if modo == "Semana" else None)
+        return self.reporte(modo, self.semana_num() if modo == "Semana" else None)
 
     def guardar_reporte_actual(self):
         m = self.modelo_actual()
@@ -4608,13 +4811,12 @@ class App(tk.Tk):
         self.switch = Interruptor(pie, self)
         self.switch.pack(anchor="w")
         tk.Label(side, text="Periodo", bg=SIDE_BG, fg=SIDE_MUTED, font=F["peq_b"]).pack(anchor="w", padx=E(24), pady=(E(26), E(6)))
-        cb_mes = Campo(side, self, self.var_mes, ancho=188, valores=MESES, solo_lectura=True)
-        cb_mes.pack(padx=E(24), pady=E(3), anchor="w")
+        self.sel_meses = SelectorMeses(side, self, 188)
+        self.sel_meses.pack(padx=E(24), pady=E(3), anchor="w")
         anios = sorted({str(y) for y in range(2024, 2036)} | {k[:4] for k in self.datos["periodos"]})
         cb_anio = Campo(side, self, self.var_anio, ancho=188, valores=anios, solo_lectura=True)
         cb_anio.pack(padx=E(24), pady=E(3), anchor="w")
-        for cb in (cb_mes, cb_anio):
-            cb.bind("<<ComboboxSelected>>", lambda e: self.cambiar_periodo())
+        cb_anio.bind("<<ComboboxSelected>>", lambda e: self.cambiar_periodo())
         tk.Label(side, text="Menú", bg=SIDE_BG, fg=SIDE_MUTED, font=F["peq_b"]).pack(anchor="w", padx=E(24), pady=(E(26), E(6)))
         self.nav = {}
         for clave, texto in self.NAV:
