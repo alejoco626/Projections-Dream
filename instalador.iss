@@ -20,6 +20,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+CloseApplicationsFilter=Projections_Dream.exe
 RestartApplications=no
 
 [Languages]

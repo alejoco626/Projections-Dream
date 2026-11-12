@@ -84,7 +84,7 @@ class PruebaInstalador(unittest.TestCase):
                 mock.patch("subprocess.Popen") as popen:
             actualizador.lanzar_instalador("C:/Setup.exe")
         argumentos, opciones = popen.call_args
-        self.assertEqual(argumentos[0][1:], ["/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS"])
+        self.assertEqual(argumentos[0][1:], ["/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", "/FORCECLOSEAPPLICATIONS"])
         self.assertEqual(opciones["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
         self.assertNotIn("_MEIPASS2", opciones["env"])
         self.assertFalse(any(clave.startswith("_PYI") for clave in opciones["env"]))

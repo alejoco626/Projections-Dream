@@ -122,7 +122,7 @@ def lanzar_instalador(ruta_instalador):
     }
     entorno["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     subprocess.Popen(
-        [ruta_instalador, "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS"],
+        [ruta_instalador, "/SILENT", "/NORESTART", "/SUPPRESSMSGBOXES", "/FORCECLOSEAPPLICATIONS"],
         env=entorno,
         close_fds=True,
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
