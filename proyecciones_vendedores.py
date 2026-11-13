@@ -479,17 +479,24 @@ def con_ritmo(c, frac):
     return c
 
 
-def con_necesaria(c):
-    """Proyeccion que hace falta para llegar a la meta si se sigue cerrando al mismo ritmo:
-    tasa = vendido / proyectado total; necesaria = meta / tasa; falta proyectar = necesaria - ya proyectado.
-    (Ej.: 20,000 proyectados y 3,000 vendidos = 15%; para vender 20,000 hacen falta 133,333 de proyeccion.)"""
+def con_necesaria(c, meta_mes=None):
+    """Proyeccion que hace falta para llegar a la meta si se sigue cerrando al mismo ritmo.
+    tasa de cierre = vendido / proyectado total (activas + perdidas + exitosas).
+    % faltante = meta del periodo / meta mensual - vendido / meta mensual
+      (en vista mensual la meta del periodo ES la mensual: 100% - vendido / meta).
+    Falta vender = % faltante x meta mensual; falta proyectar = falta vender / tasa de cierre.
+    (Ej.: meta mensual 1,000 y semanal 250; vendido 100 de 1,000 = 10%; faltante 25% - 10% = 15% = 150 por vender;
+    con 20% de cierre hay que proyectar 750 mas.)"""
     ing = c["neto"] + c["proy"] + c["perdidas"]
+    base = meta_mes if meta_mes and meta_mes > 0 else c["meta"]
     c["ingresado"] = ing
     c["tasa"] = c["neto"] / ing if ing > 0 else None
+    c["pct_real"] = c["neto"] / base if base > 0 else None
+    c["pct_falta"] = max(0.0, c["meta"] / base - c["neto"] / base) if base > 0 else None
     c["nec_total"] = c["nec_falta"] = None
     if c["meta"] > 0 and 0 < c["neto"] < c["meta"]:
-        c["nec_total"] = c["meta"] / c["tasa"]
-        c["nec_falta"] = max(0.0, c["nec_total"] - ing)
+        c["nec_falta"] = max(0.0, c["pct_falta"] * base / c["tasa"])
+        c["nec_total"] = ing + c["nec_falta"]
     return c
 
 
@@ -509,7 +516,7 @@ def construir_reporte(datos, clave, modo, semana, hoy=None):
         c.update({"id": vid, "nombre": nombres[vid], "ci": next(v.get("ci", 0) for v in datos["vendedores"] if v["id"] == vid),
                   "meta_mes": mv["mes"], "meta_sem": float(mv["sem"]) if mv["sem"] else mv["mes"] / 4.0,
                   "arrastre": ms[vid][semana - 1]["arrastre"] if modo == "Semana" else 0.0})
-        filas.append(con_necesaria(con_ritmo(c, frac)))
+        filas.append(con_necesaria(con_ritmo(c, frac), c["meta_mes"]))
     semanas = []
     for i, (a, b) in enumerate(rangos_semanas(clave), 1):
         sr = [r for r in regs_all if semana_de(r["fecha"], clave) == i]
@@ -525,7 +532,7 @@ def construir_reporte(datos, clave, modo, semana, hoy=None):
     else:
         titulo = "{} · Mes completo".format(nombre_periodo(clave))
     meta_eq = sum(f["meta"] for f in filas)
-    equipo = con_necesaria(con_ritmo(calcular_tarjeta(regs, meta_eq), frac))
+    equipo = con_necesaria(con_ritmo(calcular_tarjeta(regs, meta_eq), frac), sum(f["meta_mes"] for f in filas))
     equipo["arrastre"] = sum(f["arrastre"] for f in filas)
     return {"version": 1, "clave": clave, "periodo": nombre_periodo(clave), "vista": modo, "semana": semana,
             "titulo": titulo, "creado": datetime.now().isoformat(timespec="seconds"),
@@ -1442,8 +1449,8 @@ def _slide_resumen(pdf, m):
 
 
 def _slide_necesaria(pdf, m):
-    cols = [("Vendedor", 66, "l"), ("Meta", 290, "r"), ("Vendido", 385, "r"), ("Proyectado", 490, "r"),
-            ("Tasa", 565, "r"), ("Necesaria", 700, "r"), ("Falta proyectar", 905, "r")]
+    cols = [("Vendedor", 66, "l"), ("Meta", 275, "r"), ("Vendido", 365, "r"), ("Proyectado", 465, "r"),
+            ("Tasa", 540, "r"), ("Necesaria", 650, "r"), ("% faltante", 775, "r"), ("Falta proyectar", 905, "r")]
     filas = list(m["filas"])
     trozos = [filas[i:i + 6] for i in range(0, len(filas), 6)] or [[]]
     for idx, trozo in enumerate(trozos):
@@ -1482,21 +1489,23 @@ def _slide_necesaria(pdf, m):
             if f["meta"] <= 0:
                 pdf.text(905, y + 22, "Sin meta", 10.5, False, MUTED, "r")
             else:
-                pdf.text(290, y + 22, fm0(f["meta"]), 11, equipo, INK, "r")
-                pdf.text(385, y + 22, fm0(f["neto"]), 11, True, AZUL, "r")
-                pdf.text(490, y + 22, fm0(f["ingresado"]), 11, equipo, INK, "r")
-                pdf.text(565, y + 22, pct0(f["tasa"], 1.0) if f["tasa"] is not None else "—", 11, equipo, INK, "r")
+                pdf.text(275, y + 22, fm0(f["meta"]), 11, equipo, INK, "r")
+                pdf.text(365, y + 22, fm0(f["neto"]), 11, True, AZUL, "r")
+                pdf.text(465, y + 22, fm0(f["ingresado"]), 11, equipo, INK, "r")
+                pdf.text(540, y + 22, pct0(f["tasa"], 1.0) if f["tasa"] is not None else "—", 11, equipo, INK, "r")
                 if f["neto"] >= f["meta"]:
                     pdf.text(905, y + 22, "Meta lograda", 11, True, AZUL_MED, "r")
                 elif f["nec_total"] is None:
                     pdf.text(905, y + 22, "Sin ventas aún", 10.5, False, MUTED, "r")
                 else:
-                    pdf.text(700, y + 22, fm0(f["nec_total"]), 11, equipo, INK, "r")
+                    pdf.text(650, y + 22, fm0(f["nec_total"]), 11, equipo, INK, "r")
+                    pdf.text(775, y + 22, pct0(f["pct_falta"], 1.0), 11, equipo, INK, "r")
                     pdf.text(905, y + 22, fm0(f["nec_falta"]), 11, True, CORINTO, "r")
             y += 36
         if ultimo:
-            pdf.text(48, 492, "Tasa = vendido ÷ proyectado total (activas + perdidas + exitosas). Necesaria = meta ÷ tasa. "
-                              "Falta proyectar = necesaria - proyectado.", 9, False, MUTED, maxw=864)
+            pdf.text(48, 484, "Tasa = vendido ÷ proyectado total (activas + perdidas + exitosas). % faltante = meta del período ÷ meta mensual - "
+                              "vendido ÷ meta mensual (en vista mensual: 100% - vendido ÷ meta).", 9, False, MUTED, maxw=864)
+            pdf.text(48, 497, "Falta proyectar = (% faltante x meta mensual) ÷ tasa. Necesaria = proyectado + falta proyectar.", 9, False, MUTED, maxw=864)
         _pie(pdf, m)
 
 
@@ -1595,8 +1604,8 @@ def _slide_vendedor(pdf, m, f):
         if f["neto"] >= f["meta"]:
             nota = "Meta lograda"
         elif f.get("nec_total") is not None:
-            nota = "Para la meta: proyectar {} en total (faltan {}) · cierre {}".format(
-                fm0(f["nec_total"]), fm0(f["nec_falta"]), pct0(f["tasa"], 1.0))
+            nota = "Para la meta: proyectar {} en total (faltan {}) · falta {} · cierre {}".format(
+                fm0(f["nec_total"]), fm0(f["nec_falta"]), pct0(f["pct_falta"], 1.0), pct0(f["tasa"], 1.0))
         else:
             nota = "Aún sin ventas: no se puede calcular la proyección necesaria"
         pdf.text(190, 358, nota, 9.5, False, MUTED, maxw=540)
@@ -2369,17 +2378,17 @@ def dibujar_necesaria(cv, w, filas, equipo):
     """Tabla: por vendedor y para el equipo, cuanta proyeccion hace falta para llegar a la meta con la tasa actual."""
     cv.create_text(0, 9, text="Proyección necesaria para la meta", anchor="w", font=F["h2"], fill=INK)
     cv.create_text(0, 28, text="Con la tasa de cierre actual: vendido ÷ proyectado.", anchor="w", font=F["peq"], fill=MUTED)
-    xt, xp, xn, xf = w * 0.42, w * 0.60, w * 0.80, w
+    xt, xp, xn, xq, xf = w * 0.37, w * 0.52, w * 0.67, w * 0.82, w
     y = 56
     cv.create_text(0, y, text="Vendedor", anchor="w", font=F["peq"], fill=MUTED)
-    for x, t in ((xt, "Tasa de cierre"), (xp, "Proyectado"), (xn, "Necesaria"), (xf, "Falta proyectar")):
+    for x, t in ((xt, "Tasa de cierre"), (xp, "Proyectado"), (xn, "Necesaria"), (xq, "% faltante"), (xf, "Falta proyectar")):
         cv.create_text(x, y, text=t, anchor="e", font=F["peq"], fill=MUTED)
     for k, f in enumerate(list(filas) + [equipo]):
         y += 24
         total = k == len(filas)
         cv.create_line(0, y - 12, w, y - 12, fill=BORDE)
         fb = F["bold"] if total else F["base"]
-        cv.create_text(0, y, text=ajustar(f["nombre"], fb, w * 0.30), anchor="w", font=fb, fill=INK)
+        cv.create_text(0, y, text=ajustar(f["nombre"], fb, w * 0.22), anchor="w", font=fb, fill=INK)
         if f["meta"] <= 0:
             cv.create_text(xf, y, text="Sin meta", anchor="e", font=F["peq"], fill=MUTED)
             continue
@@ -2391,6 +2400,7 @@ def dibujar_necesaria(cv, w, filas, equipo):
             cv.create_text(xf, y, text="Sin ventas aún", anchor="e", font=F["peq"], fill=MUTED)
         else:
             cv.create_text(xn, y, text=fm0(f["nec_total"]), anchor="e", font=fb, fill=INK)
+            cv.create_text(xq, y, text=pct0(f["pct_falta"], 1.0), anchor="e", font=fb, fill=INK)
             cv.create_text(xf, y, text=fm0(f["nec_falta"]), anchor="e", font=F["bold"], fill=CORINTO)
 
 

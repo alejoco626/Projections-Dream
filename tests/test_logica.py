@@ -32,6 +32,17 @@ class PruebaMetas(unittest.TestCase):
         self.assertAlmostEqual(t["tasa"], 15000 / 32000)
         self.assertAlmostEqual(t["nec_total"], 28000 / (15000 / 32000))
 
+    def test_porcentaje_faltante(self):
+        regs = [reg(1, "2026-11-02", 100, "exitosa"), reg(2, "2026-11-03", 300, "activa"), reg(3, "2026-11-04", 100, "perdida")]
+        # semana: meta semanal 250 de 1,000 mensual; vendido 100 -> 25% - 10% = 15%; tasa 20% -> faltan 750 por proyectar
+        sem = P.con_necesaria(P.calcular_tarjeta(regs, 250), 1000)
+        self.assertAlmostEqual(sem["pct_falta"], 0.15)
+        self.assertAlmostEqual(sem["nec_falta"], 750)
+        # mes: 100% - 100/1000 = 90%
+        mes = P.con_necesaria(P.calcular_tarjeta(regs, 1000), 1000)
+        self.assertAlmostEqual(mes["pct_falta"], 0.90)
+        self.assertAlmostEqual(mes["nec_falta"], 4500)
+
 
 class PruebaImportar(unittest.TestCase):
     def test_json_y_repetidos(self):
