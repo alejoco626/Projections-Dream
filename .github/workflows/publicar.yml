@@ -34,7 +34,8 @@ jobs:
         run: >
           pyinstaller --onefile --windowed --clean
           --name Projections_Dream
-          --icon Logo_Ovalado.ico
+          --icon Proyecciones_Dream.ico
+          --add-data "Proyecciones_Dream.ico;."
           proyecciones_vendedores.py
 
       - name: Instalar Inno Setup

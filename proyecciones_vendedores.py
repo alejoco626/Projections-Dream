@@ -43,6 +43,15 @@ from tkinter import font as tkfont
 
 import actualizador
 
+ICONO = "Proyecciones_Dream.ico"
+
+
+def ruta_recurso(nombre):
+    """Funciona tanto desde el codigo fuente como dentro del .exe de PyInstaller."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, nombre)
+
+
 APP_NAME = "Proyecciones de Vendedores"
 # El flujo de GitHub (publicar.yml) reescribe esta linea con la etiqueta de la version.
 VERSION_APP = "1.0.0"
@@ -4521,6 +4530,10 @@ class App(tk.Tk):
         self.ir("panel", animar=False)
         self.after(350, self.pages["panel"].al_mostrar)     # primer "llenado" de los anillos
         self.protocol("WM_DELETE_WINDOW", self.cerrar)
+        try:                                                 # icono propio en barra de titulo, Alt+Tab y barra de tareas
+            self.iconbitmap(default=ruta_recurso(ICONO))
+        except Exception:
+            pass
         self.after(20000, self._auto_guardar)
         self.after(4000, self.buscar_actualizacion)      # solo el programa instalado se actualiza
         if aviso:
@@ -4909,6 +4922,11 @@ def main():
     try:  # nitidez en Windows con pantallas de alta resolucion
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+    try:  # identidad propia en la barra de tareas: al anclarla conserva su icono y no se agrupa con Python
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DreamTravel.ProyeccionesDream")
     except Exception:
         pass
     App().mainloop()
