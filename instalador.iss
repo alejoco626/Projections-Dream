@@ -21,6 +21,7 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 CloseApplicationsFilter=Projections_Dream.exe
+ChangesAssociations=yes
 RestartApplications=no
 
 [Languages]
@@ -33,18 +34,22 @@ Name: "desktopicon"; Description: "Crear un acceso directo en el escritorio"; Fl
 
 [Files]
 Source: "dist\Projections_Dream.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Proyecciones_Dream.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Proyecciones Dream"; Filename: "{app}\Projections_Dream.exe"
-Name: "{autodesktop}\Proyecciones Dream"; Filename: "{app}\Projections_Dream.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Proyecciones Dream"; Filename: "{app}\Projections_Dream.exe"; IconFilename: "{app}\Proyecciones_Dream.ico"; AppUserModelID: "DreamTravel.ProyeccionesDream"
+Name: "{autodesktop}\Proyecciones Dream"; Filename: "{app}\Projections_Dream.exe"; IconFilename: "{app}\Proyecciones_Dream.ico"; AppUserModelID: "DreamTravel.ProyeccionesDream"; Tasks: desktopicon
 
 [InstallDelete]
 ; Limpia restos de versiones anteriores antes de copiar la nueva. Los datos del usuario
 ; viven en su carpeta personal (ProyeccionesVendedores) y nunca se tocan.
 Type: files; Name: "{app}\Projections_Dream*.exe"
 Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\Proyecciones_Dream.ico"
 
 [Run]
+; Refresca la cache de iconos de Windows para que el icono nuevo se vea en Inicio, escritorio y barra de tareas.
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden nowait; Check: FileExists(ExpandConstant('{sys}\ie4uinit.exe'))
 ; Instalacion normal: pregunta si abrir el programa al terminar.
 Filename: "{app}\Projections_Dream.exe"; Description: "Abrir Proyecciones Dream"; Flags: nowait postinstall skipifsilent
 ; Actualizacion automatica (modo silencioso): vuelve a abrir el programa sola.
