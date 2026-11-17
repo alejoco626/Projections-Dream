@@ -42,6 +42,7 @@ from tkinter import ttk, messagebox, filedialog
 from tkinter import font as tkfont
 
 import actualizador
+import novedades
 
 ICONO = "Proyecciones_Dream.ico"
 
@@ -4662,6 +4663,7 @@ class App(tk.Tk):
         except Exception:
             pass
         self.after(20000, self._auto_guardar)
+        self.after(600, self.mostrar_novedades)          # una sola vez, al abrir recien actualizado
         self.after(4000, self.buscar_actualizacion)      # solo el programa instalado se actualiza
         if aviso:
             self.after(300, lambda: messagebox.showwarning(APP_NAME, aviso, parent=self))
@@ -4975,6 +4977,51 @@ class App(tk.Tk):
             self.nav[clave] = it
 
     # ---- actualizacion automatica desde GitHub Releases
+    def mostrar_novedades(self):
+        """Ventana emergente con los cambios y correcciones, al terminar de actualizar."""
+        if not getattr(sys, "frozen", False):
+            return                                       # en desarrollo no se lleva registro de versiones
+        notas = novedades.notas_a_mostrar(VERSION_APP, novedades.ARGUMENTO_ACTUALIZADO in sys.argv,
+                                          novedades.leer_version_vista())
+        novedades.guardar_version_vista(VERSION_APP)
+        if notas:
+            self.ventana_novedades(notas)
+
+    def ventana_novedades(self, notas):
+        v = tk.Toplevel(self)
+        v.withdraw()
+        v.title("Actualización")
+        v.configure(bg=BG)
+        v.resizable(False, False)
+        v.transient(self)
+        try:
+            v.iconbitmap(ruta_recurso(ICONO))
+        except Exception:
+            pass
+        cuerpo = tk.Frame(v, bg=BG)
+        cuerpo.pack(fill="both", expand=True, padx=E(28), pady=(E(20), E(18)))
+        tk.Label(cuerpo, text="Actualización v{}".format(VERSION_APP), bg=BG, fg=AZUL, font=F["titulo"]).pack(anchor="w")
+        for clave, titulo, vineta in novedades.SECCIONES:
+            elementos = notas.get(clave) or []
+            if not elementos:
+                continue
+            tk.Label(cuerpo, text=titulo, bg=BG, fg=INK, font=F["h2"]).pack(anchor="w", pady=(E(12), E(4)))
+            for elemento in elementos:
+                tk.Label(cuerpo, text="{}  {}".format(vineta, elemento), bg=BG, fg=INK, font=F["base"],
+                         justify="left", anchor="w", wraplength=E(420)).pack(anchor="w", padx=(E(6), 0), pady=(0, E(2)))
+        boton = Boton(cuerpo, self, "Entendido", v.destroy, "primario", ancho=120)
+        boton.pack(anchor="e", pady=(E(16), 0))
+        v.bind("<Escape>", lambda e: v.destroy())
+        v.bind("<Return>", lambda e: v.destroy())
+        v.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - v.winfo_reqwidth()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - v.winfo_reqheight()) // 3
+        v.geometry("+{}+{}".format(max(x, 0), max(y, 0)))
+        v.deiconify()
+        v.lift()
+        v.grab_set()
+        v.focus_force()
+
     def buscar_actualizacion(self, manual=False):
         if not getattr(sys, "frozen", False):
             if manual:

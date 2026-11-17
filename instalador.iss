@@ -53,7 +53,7 @@ Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden nowait; Ch
 ; Instalacion normal: pregunta si abrir el programa al terminar.
 Filename: "{app}\Projections_Dream.exe"; Description: "Abrir Proyecciones Dream"; Flags: nowait postinstall skipifsilent
 ; Actualizacion automatica (modo silencioso): vuelve a abrir el programa sola.
-Filename: "{app}\Projections_Dream.exe"; Flags: nowait skipifnotsilent
+Filename: "{app}\Projections_Dream.exe"; Parameters: "--actualizado"; Flags: nowait skipifnotsilent
 
 [Code]
 function SetEnvironmentVariable(lpName, lpValue: String): Boolean;

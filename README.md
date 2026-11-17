@@ -18,6 +18,7 @@ python -m unittest discover -s tests -t .    # pruebas (no requieren pantalla pa
 | Archivo | Contenido |
 | --- | --- |
 | `proyecciones_vendedores.py` | Aplicación completa (lógica, PDF, interfaz) y `VERSION_APP` |
+| `novedades.py` | Notas de cada versión para la ventana «Actualización» |
 | `actualizador.py` | Búsqueda, descarga (con SHA-256) e instalación de versiones nuevas desde GitHub Releases |
 | `poner_version.py` | Escribe la versión de la etiqueta dentro del programa al publicar |
 | `instalador.iss` | Instalador de Inno Setup (el `AppId` no debe cambiar jamás) |
@@ -26,17 +27,19 @@ python -m unittest discover -s tests -t .    # pruebas (no requieren pantalla pa
 
 ## Publicar una versión nueva (actualización automática)
 
-1. Sube tus cambios a `main`.
-2. Crea y sube una etiqueta nueva:
+1. Agrega las notas de la versión en `novedades.py` (cambios con «-», correcciones con «*»);
+   se muestran en una ventana al terminar de actualizar.
+2. Sube tus cambios a `main`.
+3. Crea y sube una etiqueta nueva:
 
    ```bash
    git tag v1.0.1
    git push origin v1.0.1
    ```
 
-3. GitHub Actions ejecuta las pruebas, compila `Projections_Dream.exe`, arma
+4. GitHub Actions ejecuta las pruebas, compila `Projections_Dream.exe`, arma
    `Projections_Dream_Setup.exe` y lo publica en **Releases**.
-4. Los equipos con el programa instalado preguntan «¿Actualizar ahora?» al abrirlo (o desde
+5. Los equipos con el programa instalado preguntan «¿Actualizar ahora?» al abrirlo (o desde
    ⚙ Configuración → Buscar actualización), descargan el instalador, lo verifican y se reinstalan solos.
 
 La primera instalación se hace descargando `Projections_Dream_Setup.exe` del último release.
