@@ -46,6 +46,30 @@ class PruebaMetas(unittest.TestCase):
         self.assertAlmostEqual(mes["pct_falta"], 0.90)
         self.assertAlmostEqual(mes["nec_falta"], 4500)
 
+    def test_regresar_a_seguimiento(self):
+        d = {"version": 3, "vendedores": [], "metas": {}, "reportes": [], "config": {},
+             "periodos": {"2026-11": [reg(1, "2026-11-02", 100, "exitosa"), reg(2, "2026-11-03", 300, "activa")],
+                          "2026-10": [reg(3, "2026-10-02", 50, "activa")]}}
+        n = P.regresar_a_seguimiento(d, ["2", "3", "no-existe"], datetime(2026, 11, 17, 12, 0))
+        self.assertEqual(n, 2)
+        self.assertEqual([r["id"] for r in d["periodos"]["2026-11"]], ["1"])         # ya no cuentan en tablas ni totales
+        self.assertEqual(d["periodos"]["2026-10"], [])
+        self.assertEqual({h["reg"]["id"]: h["periodo"] for h in d["regresos"]}, {"2": "2026-11", "3": "2026-10"})
+        rid = next(h["id"] for h in d["regresos"] if h["reg"]["id"] == "2")
+        self.assertEqual(P.restaurar_regresos(d, [rid]), 1)                          # vuelve a su periodo
+        self.assertEqual(sorted(r["id"] for r in d["periodos"]["2026-11"]), ["1", "2"])
+        self.assertEqual(len(d["regresos"]), 1)
+        self.assertEqual(P.restaurar_regresos(d, ["nada"]), 0)
+
+    def test_enlaces(self):
+        con = reg(7, "2026-11-02", 1, "activa")
+        con["lead"] = "https://x.bitrix24.es/crm/deal/details/777/"
+        sin = dict(con, lead="888")
+        self.assertEqual(P.url_de(con), con["lead"])
+        self.assertIsNone(P.url_de(sin))
+        self.assertEqual(P.etiqueta_id(con), "↗ 777")
+        self.assertEqual(P.etiqueta_id(sin), "888")
+
 
 class PruebaImportar(unittest.TestCase):
     def test_json_y_repetidos(self):

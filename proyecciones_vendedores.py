@@ -823,6 +823,41 @@ def vendedor_por_nombre(datos, nombre):
 
 # ------------------------------------------------------------------ exportar
 # (clave, nombre en el programa, nombre por defecto en el archivo)
+def regresar_a_seguimiento(datos, ids, ahora=None):
+    """Saca las proyecciones de sus periodos (dejan de contar en tablas y totales) y las anota en datos['regresos'].
+    Devuelve cuantas movio."""
+    ids = set(ids)
+    ahora = ahora or datetime.now()
+    movidos = []
+    for clave in list(datos["periodos"]):
+        quedan = []
+        for r in datos["periodos"][clave]:
+            if r["id"] in ids:
+                movidos.append({"id": uuid.uuid4().hex[:10], "regreso": ahora.isoformat(timespec="seconds"),
+                                "periodo": clave, "reg": dict(r)})
+            else:
+                quedan.append(r)
+        datos["periodos"][clave] = quedan
+    datos.setdefault("regresos", []).extend(movidos)
+    return len(movidos)
+
+
+def restaurar_regresos(datos, rids):
+    """Devuelve a su periodo original las proyecciones que habian regresado a Seguimiento. Devuelve cuantas restauro."""
+    rids = set(rids)
+    resto, n = [], 0
+    for h in datos.get("regresos", []):
+        if h["id"] not in rids:
+            resto.append(h)
+            continue
+        lista = datos["periodos"].setdefault(h["periodo"], [])
+        if all(x["id"] != h["reg"]["id"] for x in lista):
+            lista.append(dict(h["reg"]))
+            n += 1
+    datos["regresos"] = resto
+    return n
+
+
 EXP_COLUMNAS = [("fecha", "Fecha", "Fecha"), ("vend", "Vendedor", "Asesor de ventas"), ("lead", "Enlace", "Enlace"),
                 ("id", "ID de la negociación", "ID negociación"), ("campana", "Campaña", "Campaña"),
                 ("monto", "Monto", "Monto"), ("tipo", "Estado", "Estado"), ("periodo", "Periodo", "Periodo"),
@@ -1155,7 +1190,7 @@ class Almacen:
                 aviso = "No se pudo leer el archivo de datos. Se guardó una copia en:\n" + copia
                 datos = None
         if datos is None:
-            datos = {"version": 3, "vendedores": [dict(v) for v in VEND_DEFAULT], "periodos": {}, "metas": {}, "reportes": []}
+            datos = {"version": 3, "vendedores": [dict(v) for v in VEND_DEFAULT], "periodos": {}, "metas": {}, "reportes": [], "regresos": []}
         vend = datos.get("vendedores")
         if isinstance(vend, dict):          # formato anterior: {"A": "LESLY", ...}
             datos["vendedores"] = [{"id": k, "nombre": n, "ci": i} for i, (k, n) in enumerate(vend.items())]
@@ -1164,6 +1199,8 @@ class Almacen:
         datos["version"] = 3
         datos.setdefault("metas", {})
         datos.setdefault("reportes", [])
+        if not isinstance(datos.get("regresos"), list):
+            datos["regresos"] = []
         if not isinstance(datos.get("config"), dict):
             datos["config"] = {}
         for v in datos["vendedores"]:
@@ -2092,6 +2129,11 @@ class Boton(tk.Canvas):
         self._ancho = self._medir()
         self.configure(width=self._ancho)
         self._pintar(self.actual)
+
+    def poner_estilo(self, estilo):
+        if estilo != self.estilo:
+            self.estilo = estilo
+            self._pintar(self._colores()[1 if self.sobre else 0])
 
     def _pintar(self, color):
         self.actual = color
@@ -3426,6 +3468,52 @@ class DialogoVendedor(tk.Toplevel):
         a.notificar()
 
 
+def url_de(r):
+    """Enlace del lead si es una direccion web; si solo tiene el ID, None."""
+    l = (r.get("lead") or "").strip()
+    return l if l.lower().startswith("http") else None
+
+
+def etiqueta_id(r):
+    """ID para mostrar en tablas; lleva una flecha si el lead tiene enlace."""
+    i = extraer_id(r["lead"])
+    return ("↗ " + i) if i and url_de(r) else i
+
+
+def enlazar_columnas(tree, columnas, url_de_fila, avisar):
+    """Vuelve hipervinculos las columnas indicadas: manita al pasar y un clic abre el navegador.
+    Con Ctrl o Mayus el clic solo selecciona. Devuelve una funcion que dice si un evento cayo sobre un enlace."""
+    ultimo = [0.0]
+
+    def sobre_enlace(e):
+        if tree.identify_region(e.x, e.y) != "cell":
+            return None
+        idx = int(tree.identify_column(e.x)[1:]) - 1
+        cols = tree["columns"]
+        if idx < 0 or idx >= len(cols) or cols[idx] not in columnas:
+            return None
+        return tree.identify_row(e.y) or None
+
+    def mover(e):
+        tree.configure(cursor="hand2" if sobre_enlace(e) else "")
+
+    def clic(e):
+        fila = sobre_enlace(e)
+        if not fila or e.state & 0x0005 or time.time() - ultimo[0] < 0.6:     # Ctrl/Mayus, o 2.o clic de un doble clic
+            return
+        ultimo[0] = time.time()
+        u = url_de_fila(fila)
+        if u:
+            webbrowser.open(u)
+        else:
+            avisar()
+
+    tree.bind("<Motion>", mover, add="+")
+    tree.bind("<Leave>", lambda e: tree.configure(cursor=""), add="+")
+    tree.bind("<ButtonRelease-1>", clic, add="+")
+    return sobre_enlace
+
+
 def tabla_en_tarjeta(master, app, cols, **kw):
     """Treeview dentro de una tarjeta redondeada. cols = [(id, titulo, ancho, ancla)]."""
     box = Tarjeta(master, radio=14, pad=10)
@@ -3567,10 +3655,17 @@ class PaginaConfig(Pagina):
         Boton(b2, app, "Vaciar este periodo", self.vaciar_periodo, "suave_rojo", bg=CARD).pack(side="left", padx=(0, E(6)))
         Boton(b2, app, "Borrar TODAS las proyecciones…", self.borrar_todo, "suave_rojo", bg=CARD).pack(side="left")
 
+        ri = seccion("Historial de regresos a Seguimiento", "Leads que regresaron a Seguimiento: salieron de la tabla y de los totales.")
+        self.lbl_reg = tk.Label(ri, text="", bg=CARD, fg=INK, font=F["base"], anchor="w")
+        self.lbl_reg.pack(anchor="w", pady=(0, E(8)))
+        Boton(ri, app, "Ver historial", lambda: DialogoRegresos(app), "suave", bg=CARD).pack(anchor="w")
+
         vi = seccion("Versión", "Versión {}. Cuando se publica una nueva, el programa instalado te avisa al abrirlo.".format(VERSION_APP))
         Boton(vi, app, "Buscar actualización", lambda: app.buscar_actualizacion(True), "suave", bg=CARD).pack(anchor="w")
 
     def refrescar(self):
+        n = len(self.app.datos.get("regresos", []))
+        self.lbl_reg.config(text="{} lead(s) regresado(s)".format(n) if n else "Todavía no hay regresos.")
         for area, var in self.var_graf.items():
             var.set(next(l for k, l in GRAFICAS[area] if k == self.app.grafica(area)))
 
@@ -3657,6 +3752,55 @@ class PaginaConfig(Pagina):
         if messagebox.askyesno(APP_NAME, "Se eliminarán las {} proyecciones de {}.\n(Podrás deshacerlo con «Deshacer eliminación».)\n\n¿Continuar?".format(
                 n, nombre_periodo(a.clave())), parent=a):
             a.eliminar_registros([r["id"] for r in a.registros])
+
+
+class DialogoRegresos(tk.Toplevel):
+    """Historial de leads que regresaron a Seguimiento; se pueden restaurar a su periodo."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Historial de regresos a Seguimiento")
+        self.configure(bg=BG)
+        self.geometry("{}x{}".format(E(980), E(520)))
+        self.transient(app)
+        tk.Label(self, text="Historial de regresos a Seguimiento", bg=BG, fg=AZUL, font=F["titulo"]).pack(anchor="w", padx=E(22), pady=(E(16), 0))
+        self.lbl = tk.Label(self, bg=BG, fg=MUTED, font=F["base"])
+        self.lbl.pack(anchor="w", padx=E(22))
+        box, self.tree = tabla_en_tarjeta(self, app, [
+            ("fecha", "Regresó el", 130, "center"), ("vend", "Vendedor", 120, "w"), ("id", "ID ↗", 90, "center"),
+            ("campana", "Campaña", 180, "w"), ("monto", "Monto", 100, "e"), ("tipo", "Estaba", 90, "w"),
+            ("per", "Periodo", 120, "w")], height=12, selectmode="extended")
+        box.pack(fill="both", expand=True, padx=E(22), pady=E(12))
+        enlazar_columnas(self.tree, ("id",), lambda iid: next((url_de(h["reg"]) for h in app.datos["regresos"] if h["id"] == iid), None),
+                         lambda: messagebox.showinfo(APP_NAME, "Este lead no tiene un enlace válido (solo tiene el ID).", parent=self))
+        bl = tk.Frame(self, bg=BG)
+        bl.pack(fill="x", padx=E(22), pady=(0, E(16)))
+        Boton(bl, app, "Restaurar seleccionados", self.restaurar, "primario").pack(side="left", padx=(0, E(6)))
+        Boton(bl, app, "Cerrar", self.destroy, "suave").pack(side="left")
+        self.refrescar()
+
+    def refrescar(self):
+        a = self.app
+        a.configurar_tags(self.tree)
+        self.tree.delete(*self.tree.get_children())
+        hist = sorted(a.datos.get("regresos", []), key=lambda h: h["regreso"], reverse=True)
+        for h in hist:
+            r = h["reg"]
+            self.tree.insert("", "end", iid=h["id"], tags=("t" + r["tipo"],), values=(
+                datetime.fromisoformat(h["regreso"]).strftime("%d/%m/%Y %H:%M"), a.nombre(r["vend"]), etiqueta_id(r),
+                r["campana"] or "—", fm(r["monto"]), TIPO_LABEL[r["tipo"]], nombre_periodo(h["periodo"])))
+        a.zebra(self.tree)
+        self.lbl.config(text="{} regreso(s). Para devolver uno a las tablas, selecciónalo y pulsa «Restaurar».".format(len(hist)) if hist
+                        else "Todavía no hay leads regresados a Seguimiento.")
+
+    def restaurar(self):
+        sel = self.tree.selection()
+        if not sel:
+            return messagebox.showinfo(APP_NAME, "Selecciona uno o varios leads de la lista.", parent=self)
+        n = self.app.restaurar_regresos(sel)
+        self.refrescar()
+        messagebox.showinfo(APP_NAME, "Se restauraron {} lead(s) a su periodo.".format(n), parent=self)
 
 
 class VentanaReporte(tk.Toplevel):
@@ -4161,11 +4305,13 @@ class PaginaIngreso(Pagina):
 
         tk.Label(self, text="Últimas 10 del periodo  ·  doble clic para editar", bg=BG, fg=MUTED, font=F["peq"]).pack(anchor="w", padx=E(28))
         box, self.tree = tabla_en_tarjeta(self, app, [
-            ("fecha", "Fecha", 90, "w"), ("vend", "Vendedor", 130, "w"), ("id", "ID", 80, "w"),
+            ("fecha", "Fecha", 90, "w"), ("vend", "Vendedor", 130, "w"), ("id", "ID ↗", 80, "w"),
             ("campana", "Campaña", 190, "w"), ("monto", "Monto", 100, "e"), ("tipo", "Tipo", 100, "w")],
             height=8, selectmode="extended")
         box.pack(fill="both", expand=True, padx=E(24), pady=(E(4), E(6)))
-        self.tree.bind("<Double-1>", lambda e: self.editar_seleccion())
+        es_enlace = enlazar_columnas(self.tree, ("id",), lambda iid: next((url_de(r) for r in app.registros if r["id"] == iid), None),
+                                     lambda: messagebox.showinfo(APP_NAME, "Este lead no tiene un enlace válido (solo tiene el ID).", parent=app))
+        self.tree.bind("<Double-1>", lambda e: None if es_enlace(e) else self.editar_seleccion())
         self.tree.bind("<Delete>", lambda e: self.eliminar_seleccion())
         self.lbl_tot = tk.Label(self, bg=BG, fg=INK, font=F["peq_b"], anchor="w")
         self.lbl_tot.pack(fill="x", padx=E(28))
@@ -4188,7 +4334,7 @@ class PaginaIngreso(Pagina):
         self.tree.delete(*self.tree.get_children())
         for r in reversed(a.registros[-10:]):
             self.tree.insert("", "end", iid=r["id"], tags=("t" + r["tipo"],), values=(
-                date.fromisoformat(r["fecha"]).strftime("%d/%m/%Y"), a.nombre(r["vend"]), extraer_id(r["lead"]),
+                date.fromisoformat(r["fecha"]).strftime("%d/%m/%Y"), a.nombre(r["vend"]), etiqueta_id(r),
                 r["campana"] or "—", fm(r["monto"]), TIPO_LABEL[r["tipo"]]))
         a.zebra(self.tree)
         por = {t: sum(r["monto"] for r in a.registros if r["tipo"] == t) for t in TIPOS_ORDEN}
@@ -4393,7 +4539,7 @@ class PaginaIngreso(Pagina):
 class PaginaHistorial(Pagina):
     COLS = [  # id, titulo, ancho, ancla, estira
         ("n", "#", 40, "center", False), ("fecha", "Fecha", 90, "center", False),
-        ("vend", "Vendedor", 120, "w", False), ("id", "ID", 75, "center", False),
+        ("vend", "Vendedor", 120, "w", False), ("id", "ID ↗", 80, "center", False),
         ("lead", "Lead", 330, "w", True), ("campana", "Campaña", 160, "w", False),
         ("monto", "Monto", 100, "e", False), ("tipo", "Tipo", 95, "w", False),
     ]
@@ -4417,11 +4563,17 @@ class PaginaHistorial(Pagina):
         self.var_ftipo = tk.StringVar(value=TODOS)
         self.cb_fvend = Campo(bi, app, self.var_fvend, ancho=150, valores=[TODOS], solo_lectura=True)
         self.cb_fcamp = Campo(bi, app, self.var_fcamp, ancho=190, valores=[TODAS], solo_lectura=True)
-        self.cb_ftipo = Campo(bi, app, self.var_ftipo, ancho=130, valores=[TODOS] + [TIPO_LABEL[t] for t in TIPOS_ORDEN], solo_lectura=True)
-        for i, w in enumerate((self.cb_fvend, self.cb_fcamp, self.cb_ftipo), 1):
+        for i, w in enumerate((self.cb_fvend, self.cb_fcamp), 1):
             w.grid(row=0, column=i, padx=E(4))
             w.bind("<<ComboboxSelected>>", lambda e: self.refrescar())
-        Boton(bi, app, "Limpiar filtros", self.limpiar_filtros, "suave").grid(row=0, column=4, padx=(E(8), 0))
+        Boton(bi, app, "Limpiar filtros", self.limpiar_filtros, "suave").grid(row=0, column=3, padx=(E(8), 0))
+        # filtro rapido por estado: Todas / Activas / Perdidas / Exitosas (con cuantas hay)
+        fila_chips = tk.Frame(bi, bg=CARD)
+        fila_chips.grid(row=1, column=0, columnspan=4, sticky="w", pady=(E(8), 0))
+        self.chips = {}
+        for valor, nombre in ((TODOS, "Todas"), ("Activa", "Activas"), ("Perdida", "Perdidas"), ("Exitosa", "Exitosas")):
+            self.chips[valor] = (nombre, Boton(fila_chips, app, nombre, lambda v=valor: self.elegir_tipo(v), "suave", bg=CARD, alto=30))
+            self.chips[valor][1].pack(side="left", padx=(0, E(6)))
         app.bind("<Control-f>", lambda e: (app.ir("historial"), self.e_busca.focus_set(), self.e_busca.select_range(0, "end")))
 
         box = Tarjeta(self, radio=14, pad=10)
@@ -4434,7 +4586,9 @@ class PaginaHistorial(Pagina):
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        self.tree.bind("<Double-1>", lambda e: self.editar_seleccion())
+        es_enlace = enlazar_columnas(self.tree, ("id", "lead"), self._url_fila,
+                                     lambda: messagebox.showinfo(APP_NAME, "Este lead no tiene un enlace válido (solo tiene el ID).", parent=app))
+        self.tree.bind("<Double-1>", lambda e: None if es_enlace(e) else self.editar_seleccion())
         self.tree.bind("<Delete>", lambda e: self.eliminar_seleccion())
         self.tree.bind("<Button-3>", self.menu_contextual)
         self.menu = tk.Menu(self, tearoff=0)
@@ -4443,6 +4597,7 @@ class PaginaHistorial(Pagina):
         self.menu.add_separator()
         self.menu.add_command(label="Editar", command=self.editar_seleccion)
         self.menu.add_command(label="Abrir lead en el navegador", command=self.abrir_lead)
+        self.menu.add_command(label="Regresar a Seguimiento", command=self.regresar_seleccion)
         self.menu.add_command(label="Eliminar", command=self.eliminar_seleccion)
 
         ac = tk.Frame(self, bg=BG)
@@ -4451,6 +4606,7 @@ class PaginaHistorial(Pagina):
             Boton(ac, app, "Marcar " + TIPO_LABEL[t], lambda t=t: self.marcar(t), "suave").pack(side="left", padx=E(3))
         Boton(ac, app, "Editar", self.editar_seleccion, "suave").pack(side="left", padx=(E(12), E(3)))
         Boton(ac, app, "Abrir lead", self.abrir_lead, "suave").pack(side="left", padx=E(3))
+        Boton(ac, app, "Regresar a Seguimiento", self.regresar_seleccion, "suave").pack(side="left", padx=E(3))
         Boton(ac, app, "Eliminar", self.eliminar_seleccion, "suave_rojo").pack(side="left", padx=E(3))
         Boton(ac, app, "Deshacer eliminación", app.deshacer_eliminacion, "suave").pack(side="left", padx=(E(12), E(3)))
         self.lbl_estado = tk.Label(ac, text="", bg=BG, fg=MUTED, font=F["peq"])
@@ -4492,13 +4648,21 @@ class PaginaHistorial(Pagina):
         a.configurar_tags(self.res)
         sel_previa = set(self.tree.selection())
         texto, vend, camp, tipo = self.filtros_actuales()
+        conteo = {t: 0 for t in TIPOS_ORDEN}
+        for _, r in filtrar(regs_v, a.nombres, texto, vend, camp, TODOS):       # cuantas hay por estado con los demas filtros
+            conteo[r["tipo"]] += 1
+        elegido = self.var_ftipo.get()
+        for valor, (nombre, chip) in self.chips.items():
+            n = sum(conteo.values()) if valor == TODOS else conteo[LABEL_TIPO[valor]]
+            chip.poner_texto("{} ({})".format(nombre, n))
+            chip.poner_estilo("primario" if valor == elegido else "suave")
         filas = self._ordenar(filtrar(regs_v, a.nombres, texto, vend, camp, tipo))
         self.tree.delete(*self.tree.get_children())
         suma = 0.0
         for pos, r in filas:
             d = date.fromisoformat(r["fecha"])
             self.tree.insert("", "end", iid=r["id"], tags=("t" + r["tipo"],), values=(
-                pos, d.strftime("%d/%m/%Y"), a.nombre(r["vend"]), extraer_id(r["lead"]), r["lead"],
+                pos, d.strftime("%d/%m/%Y"), a.nombre(r["vend"]), etiqueta_id(r), r["lead"],
                 r["campana"] or "—", fm(r["monto"]), TIPO_LABEL[r["tipo"]]))
             suma += r["monto"]
         a.zebra(self.tree)
@@ -4541,6 +4705,24 @@ class PaginaHistorial(Pagina):
         else:
             self.sort_col, self.sort_rev = col, False
         self.refrescar()
+
+    def elegir_tipo(self, valor):
+        self.var_ftipo.set(valor)
+        self.refrescar()
+
+    def _url_fila(self, iid):
+        return next((url_de(r) for r in self.app.registros_vista if r["id"] == iid), None)
+
+    def regresar_seleccion(self):
+        sel = set(self._seleccion())
+        if not sel:
+            return
+        a = self.app
+        if not messagebox.askyesno(APP_NAME, "¿Regresar {} lead(s) a Seguimiento?\n\nDesaparecen de esta tabla y de todos los totales. "
+                                             "Quedan anotados en Configuración → Historial de regresos, desde donde se pueden restaurar."
+                                   .format(len(sel)), parent=a):
+            return
+        a.regresar_a_seguimiento(sel)
 
     def limpiar_filtros(self):
         self.var_busca.set("")
@@ -4821,6 +5003,20 @@ class App(tk.Tk):
             self.pages["ingreso"].cancelar_edicion()
         self.notificar()
         return sum(len(v) for v in borrados_por.values())
+
+    def regresar_a_seguimiento(self, ids):
+        """Saca las proyecciones de la tabla y los totales y las anota en el historial de regresos."""
+        ids = set(ids)
+        n = regresar_a_seguimiento(self.datos, ids)
+        if self.pages["ingreso"].editando in ids:
+            self.pages["ingreso"].cancelar_edicion()
+        self.notificar()
+        return n
+
+    def restaurar_regresos(self, rids):
+        n = restaurar_regresos(self.datos, rids)
+        self.notificar()
+        return n
 
     def eliminar_vendedor(self, vid):
         """Elimina al vendedor con sus proyecciones y metas (todo recuperable con 'Deshacer')."""
