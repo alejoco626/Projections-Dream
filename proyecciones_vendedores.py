@@ -655,40 +655,69 @@ def bitrix_negociacion(cfg, did, abrir=None):
     return base, deal
 
 
-def _campo_campana(base, abrir=None):
-    """(codigo, detalle) del campo personalizado de negociaciones cuyo nombre es «Campaña»; ('TITLE', {}) si no existe."""
+def _campos_campana(base, abrir=None):
+    """Campos personalizados de campaña [(codigo, detalle)], del mas confiable al menos.
+
+    Primero la lista que llena el vendedor («Seleccione Campaña»), luego el texto «Campaña».
+    Se ignoran los historicos. Lista vacia si no hay ninguno."""
     try:
         campos = bitrix_llamar(base, "crm.deal.fields", {}, abrir).get("result") or {}
     except Exception:
-        return "TITLE", {}
+        return []
+    hallados = []
     for cod, inf in campos.items():
         if not cod.startswith("UF_") or not isinstance(inf, dict):
             continue
-        if any(norm(inf.get(k) or "").strip() == "campana" for k in ("formLabel", "listLabel", "title", "editFormLabel")):
-            return cod, inf
-    return "TITLE", {}
+        nombres = [norm(inf.get(k) or "").strip() for k in ("formLabel", "listLabel", "editFormLabel")]
+        if not any("campana" in n for n in nombres) or any("historic" in n for n in nombres):
+            continue
+        if any(n.startswith("seleccione") for n in nombres):
+            prioridad = 0
+        elif "campana" in nombres:
+            prioridad = 1
+        else:
+            prioridad = 2
+        hallados.append((prioridad, cod, inf))
+    return [(cod, inf) for _, cod, inf in sorted(hallados, key=lambda h: h[0])]
+
+
+def _valor_campo(deal, campo, info):
+    """Valor legible de un campo: las listas desplegables vienen como codigo y se traducen a su nombre."""
+    valor = deal.get(campo) if campo else None
+    items = (info or {}).get("items") or []
+    if items and valor not in (None, "", []):
+        nombres = {str(i.get("ID")): i.get("VALUE") for i in items}
+        valor = [nombres.get(str(v), v) for v in valor] if isinstance(valor, (list, tuple)) else nombres.get(str(valor), valor)
+    if isinstance(valor, (list, tuple)):
+        valor = ", ".join(str(v) for v in valor if v not in (None, ""))
+    return valor if valor not in (None, False) else ""
 
 
 def leer_negociacion(cfg, did, abrir=None):
     """Lee la negociacion y devuelve lo que llena el formulario: monto, campaña y vendedor (editables despues)."""
     base, deal = bitrix_negociacion(cfg, did, abrir)
     campo = (cfg.get("campo_campana") or "auto").strip()
-    info = {}
-    if campo.lower() in ("auto", "title"):          # busca el campo personalizado llamado «Campaña»
-        campo, info = _campo_campana(base, abrir)
-    valor = deal.get(campo) if campo else None
-    items = info.get("items") or []
-    if items and valor not in (None, "", []):       # lista desplegable: el valor viene como codigo
-        nombres = {str(i.get("ID")): i.get("VALUE") for i in items}
-        valor = [nombres.get(str(v), v) for v in valor] if isinstance(valor, (list, tuple)) else nombres.get(str(valor), valor)
+    valor = ""
+    if campo.lower() in ("auto", "title"):          # el primer campo de campaña que tenga valor
+        campo = ""
+        for cod, inf in _campos_campana(base, abrir):
+            valor = _valor_campo(deal, cod, inf)
+            if valor:
+                campo = cod
+                break
+        if not campo and campo_es_title(cfg):
+            campo, valor = "TITLE", deal.get("TITLE") or ""
+    else:
+        info = {}
+        if campo.startswith("UF_"):
+            info = next((inf for cod, inf in _campos_campana(base, abrir) if cod == campo), {})
+        valor = _valor_campo(deal, campo, info)
     if campo == "SOURCE_ID" and valor:       # el origen viene como codigo: se traduce a su nombre
         try:
             lista = bitrix_llamar(base, "crm.status.list", {"filter[ENTITY_ID]": "SOURCE"}, abrir).get("result") or []
             valor = next((x["NAME"] for x in lista if x.get("STATUS_ID") == valor), valor)
         except Exception:
             pass
-    if isinstance(valor, (list, tuple)):
-        valor = ", ".join(str(v) for v in valor)
     vendedor = ""
     if deal.get("ASSIGNED_BY_ID"):
         try:
@@ -701,8 +730,13 @@ def leer_negociacion(cfg, did, abrir=None):
         monto = round(float(deal.get("OPPORTUNITY") or 0), 2)
     except (TypeError, ValueError):
         monto = 0.0
-    return {"monto": monto, "campana": canon_campana(valor or ""), "vendedor": vendedor,
-            "titulo": str(deal.get("TITLE") or "")}
+    return {"monto": monto, "monto_vacio": monto <= 0, "campana": canon_campana(valor or ""),
+            "vendedor": vendedor, "titulo": str(deal.get("TITLE") or "")}
+
+
+def campo_es_title(cfg):
+    """Solo se usa el titulo como campaña si el usuario lo escribio a proposito en Configuración."""
+    return (cfg.get("campo_campana") or "").strip().upper() == "TITLE"
 
 
 def vendedor_por_nombre(datos, nombre):
@@ -3424,7 +3458,7 @@ class PaginaConfig(Pagina):
         Campo(ci, app, self.var_hook, ancho=560, placeholder="https://tuempresa.bitrix24.es/rest/1/clave/").pack(anchor="w", pady=(E(2), E(8)))
         tk.Label(ci, text="Campo de Bitrix24 con la campaña", bg=CARD, fg=MUTED, font=F["peq"]).pack(anchor="w")
         Campo(ci, app, self.var_campo, ancho=250).pack(anchor="w", pady=(E(2), E(2)))
-        tk.Label(ci, text="Déjalo en «auto» para usar el campo «Campaña». Si no la encuentra, usa «Probar con un lead».",
+        tk.Label(ci, text="Déjalo en «auto» para usar «Seleccione Campaña» y, si está vacío, «Campaña». Si no la encuentra, usa «Probar con un lead».",
                  bg=CARD, fg=MUTED, font=F["mini"]).pack(anchor="w", pady=(0, E(8)))
         bc = tk.Frame(ci, bg=CARD)
         bc.pack(anchor="w")
@@ -4015,7 +4049,9 @@ class PaginaIngreso(Pagina):
         for i, w in enumerate([self.e_fecha, self.cb_asesor, self.cb_camp, self.e_monto, self.cb_tipo]):
             w.grid(row=1, column=i, sticky="ew", padx=E(6), pady=(0, E(8)))
         tk.Label(fi, text="Enlace o ID del lead (Bitrix24)", bg=CARD, fg=MUTED, font=F["peq"]).grid(
-            row=2, column=0, columnspan=4, sticky="w", padx=E(6), pady=(0, E(3)))
+            row=2, column=0, columnspan=3, sticky="sw", padx=E(6), pady=(0, E(3)))
+        self.lbl_monto = tk.Label(fi, text="", bg=CARD, fg=CORINTO, font=F["peq_b"], anchor="w", justify="left")
+        self.lbl_monto.grid(row=2, column=3, sticky="nw", padx=E(6), pady=(0, E(3)))
         self.e_lead = Campo(fi, app, self.var_lead, ancho=600)
         self.e_lead.grid(row=3, column=0, columnspan=4, sticky="ew", padx=E(6), pady=(0, E(10)))
         Boton(fi, app, "Leer de Bitrix24", lambda: self.leer_bitrix(manual=True), "suave", bg=CARD).grid(
@@ -4034,6 +4070,7 @@ class PaginaIngreso(Pagina):
             self.lbl_auto.config(text="Borrador recuperado: se queda aquí hasta que lo guardes o lo borres.")
         self._auto_job = None
         self._borrador_job = None
+        self._auto = {}          # lo que lleno la ultima lectura de Bitrix24, para poder reemplazarlo
         self.var_lead.trace_add("write", lambda *x: self._programar_lectura())
         for v in (self.var_fecha, self.var_asesor, self.var_camp, self.var_monto, self.var_tipo, self.var_lead):
             v.trace_add("write", lambda *x: self._programar_borrador())
@@ -4092,6 +4129,8 @@ class PaginaIngreso(Pagina):
                 pass
             self._auto_job = None
         did = extraer_id(limpiar_lead(self.var_lead.get()))
+        if did != getattr(self, "_aviso_did", None):
+            self.aviso_monto(False)
         if not did or self.editando or not self.app.datos["config"].get("bitrix_webhook"):
             return
         self._auto_job = self.after(500, lambda: self.leer_bitrix(did))
@@ -4132,12 +4171,20 @@ class PaginaIngreso(Pagina):
             return self.lbl_auto.config(text="No se pudo leer: " + res["error"].replace("\n", " "), fg=CORINTO)
         d = res["ok"]
         vid = vendedor_por_nombre(a.datos, d["vendedor"])
-        if vid:
-            self.var_asesor.set(a.nombre(vid))
-        if d["campana"]:
-            self.var_camp.set(d["campana"])
-        if d["monto"] > 0:
-            self.var_monto.set("{:.2f}".format(d["monto"]))
+        # Cada lectura reemplaza lo que lleno la lectura anterior (aunque ahora venga vacio),
+        # pero respeta lo que el usuario escribio a mano.
+        nuevos = {"asesor": a.nombre(vid) if vid else "", "campana": d["campana"],
+                  "monto": "" if d["monto_vacio"] else "{:.2f}".format(d["monto"])}
+        variables = {"asesor": self.var_asesor, "campana": self.var_camp, "monto": self.var_monto}
+        for clave, var in variables.items():
+            actual = var.get().strip()
+            if not actual or actual == self._auto.get(clave) or (clave == "asesor" and vid):
+                if clave == "asesor" and not nuevos[clave]:
+                    continue                      # el asesor se elige de la lista: se deja para elegirlo
+                var.set(nuevos[clave])
+        self._auto = nuevos
+        self._aviso_did = did
+        self.aviso_monto(d["monto_vacio"])
         msg = "Leído de Bitrix24 · puedes editar los datos"
         if d["vendedor"] and not vid:
             msg += " · «{}» no está en tu lista de vendedores".format(d["vendedor"])
@@ -4145,6 +4192,9 @@ class PaginaIngreso(Pagina):
         if dup:
             msg = "Este lead ya está registrado en {} ({}).".format(nombre_periodo(dup[0]), TIPO_LABEL[dup[1]["tipo"]])
         self.lbl_auto.config(text=msg, fg=CORINTO if dup else AZUL_MED)
+
+    def aviso_monto(self, mostrar):
+        self.lbl_monto.config(text="El vendedor no colocó el monto\nen la negociación" if mostrar else "")
 
     def _error(self, msg, widget):
         messagebox.showwarning(APP_NAME, msg, parent=self.app)
@@ -4259,6 +4309,8 @@ class PaginaIngreso(Pagina):
         self.cancelar_edicion()
         self.var_lead.set("")
         self.var_monto.set("")
+        self._auto = {}
+        self.aviso_monto(False)
         self.e_lead.focus_set()
 
 

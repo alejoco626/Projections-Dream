@@ -1,6 +1,9 @@
+import io
 import json
 import os
 import sys
+import types
+import urllib.parse
 import unittest
 from datetime import date
 
@@ -89,6 +92,109 @@ class PruebaVariosMeses(unittest.TestCase):
 class PruebaVersion(unittest.TestCase):
     def test_hay_version(self):
         self.assertRegex(P.VERSION_APP, r"^\d+\.\d+(\.\d+)?$")
+
+
+
+# --------------------------------------------------- lectura desde Bitrix24
+class _Respuesta(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+
+def _bitrix_falso(deals, campos, usuarios):
+    def abrir(req, timeout=0):
+        metodo = req.full_url.rsplit("/", 1)[1][:-len(".json")]
+        p = dict(urllib.parse.parse_qsl(req.data.decode("utf-8")))
+        if metodo == "crm.deal.fields":
+            res = campos
+        elif metodo == "crm.deal.get":
+            res = deals.get(p.get("id"))
+        else:
+            res = [usuarios[p["ID"]]] if p.get("ID") in usuarios else []
+        return _Respuesta(json.dumps({"result": res}).encode("utf-8"))
+    return abrir
+
+
+CAMPOS_BITRIX = {
+    "UF_CRM_1": {"type": "enumeration", "formLabel": "Seleccione Campaña", "listLabel": "Seleccione Campaña",
+                 "items": [{"ID": "913", "VALUE": "MEDELLÍN-PROMO-2026-08-26"}]},
+    "UF_CRM_2": {"type": "enumeration", "formLabel": "Campaña Historico", "listLabel": "Campaña Historico",
+                 "items": [{"ID": "7", "VALUE": "VIEJA"}]},
+    "UF_CRM_3": {"type": "string", "formLabel": "Campaña", "listLabel": "Campaña"},
+}
+CFG_BITRIX = {"bitrix_webhook": "https://portal.bitrix24.es/rest/1/abc/"}
+
+
+class PruebaLecturaBitrix(unittest.TestCase):
+    def leer(self, deal):
+        abrir = _bitrix_falso({"5": dict(deal, ID="5")}, CAMPOS_BITRIX,
+                              {"9": {"NAME": "Josue", "LAST_NAME": "Muñoz"}})
+        return P.leer_negociacion(CFG_BITRIX, "5", abrir)
+
+    def test_prefiere_la_campana_que_elige_el_vendedor(self):
+        d = self.leer({"OPPORTUNITY": "3085.43", "ASSIGNED_BY_ID": "9", "UF_CRM_1": "913", "UF_CRM_3": ["RIO-2026-08-03"]})
+        self.assertEqual(d["campana"], "Medellín-promo-2026-08-26")
+        self.assertEqual(d["monto"], 3085.43)
+        self.assertFalse(d["monto_vacio"])
+        self.assertEqual(d["vendedor"], "Josue Muñoz")
+
+    def test_usa_el_texto_si_la_lista_esta_vacia_e_ignora_el_historico(self):
+        d = self.leer({"OPPORTUNITY": "0.00", "UF_CRM_1": "", "UF_CRM_2": "7", "UF_CRM_3": ["PANAMÁ-PROMO"]})
+        self.assertEqual(d["campana"], "Panamá-promo")
+        self.assertTrue(d["monto_vacio"])
+
+    def test_sin_campana(self):
+        d = self.leer({"OPPORTUNITY": "", "UF_CRM_1": "", "UF_CRM_2": "7", "UF_CRM_3": []})
+        self.assertEqual(d["campana"], "")
+        self.assertTrue(d["monto_vacio"])
+
+
+class _Var:
+    def __init__(self, v=""):
+        self.v = v
+
+    def get(self):
+        return self.v
+
+    def set(self, v):
+        self.v = v
+
+
+class PruebaLlenadoFormulario(unittest.TestCase):
+    """Una lectura nueva reemplaza lo que lleno la anterior, aunque ahora venga vacio."""
+
+    def setUp(self):
+        app = types.SimpleNamespace(
+            datos={"vendedores": [{"id": "v1", "nombre": "Josue"}, {"id": "v2", "nombre": "Elmer"}], "periodos": {}},
+            nombre=lambda vid: {"v1": "Josue", "v2": "Elmer"}[vid])
+        self.avisos = []
+        self.f = types.SimpleNamespace(
+            app=app, editando=None, _auto={}, var_lead=_Var(), var_asesor=_Var(), var_camp=_Var(), var_monto=_Var(),
+            lbl_auto=types.SimpleNamespace(config=lambda **k: None),
+            aviso_monto=lambda mostrar: self.avisos.append(mostrar))
+
+    def leer(self, did, monto, campana, vendedor):
+        self.f.var_lead.set(did)
+        res = {"ok": {"monto": monto, "monto_vacio": monto <= 0, "campana": campana, "vendedor": vendedor, "titulo": ""}}
+        P.PaginaIngreso.aplicar_lectura(self.f, did, res)
+
+    def test_no_arrastra_datos_de_la_negociacion_anterior(self):
+        self.leer("1", 990.0, "Panamá", "Josue Muñoz")
+        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get(), self.f.var_asesor.get()), ("990.00", "Panamá", "Josue"))
+        self.assertEqual(self.avisos[-1], False)
+        self.leer("2", 0.0, "", "Elmer Aceituno")
+        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get(), self.f.var_asesor.get()), ("", "", "Elmer"))
+        self.assertEqual(self.avisos[-1], True)
+
+    def test_respeta_lo_escrito_a_mano(self):
+        self.leer("1", 990.0, "Panamá", "Josue Muñoz")
+        self.f.var_monto.set("1200")
+        self.f.var_camp.set("Mi campaña")
+        self.leer("2", 0.0, "", "Josue Muñoz")
+        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get()), ("1200", "Mi campaña"))
 
 
 if __name__ == "__main__":
