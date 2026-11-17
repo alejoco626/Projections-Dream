@@ -70,6 +70,59 @@ class PruebaMetas(unittest.TestCase):
         self.assertEqual(P.etiqueta_id(con), "↗ 777")
         self.assertEqual(P.etiqueta_id(sin), "888")
 
+    def test_hipervinculos_de_tabla(self):
+        """El clic abre el navegador solo en las columnas de enlace, y Ctrl/Mayus solo selecciona."""
+        from unittest import mock
+
+        class Arbol:
+            def __init__(self):
+                self.enl, self.cur = {}, ""
+
+            def bind(self, ev, fn, add=None):
+                self.enl[ev] = fn
+
+            def configure(self, **kw):
+                self.cur = kw.get("cursor", self.cur)
+
+            def __getitem__(self, k):
+                return ("n", "id", "lead")
+
+            def identify_region(self, x, y):
+                return "cell" if y > 0 else "heading"
+
+            def identify_column(self, x):
+                return "#2" if x == 2 else "#1"
+
+            def identify_row(self, y):
+                return "fila1" if y > 0 else ""
+
+        class Ev:
+            def __init__(self, x, y, state=0):
+                self.x, self.y, self.state = x, y, state
+
+        avisos, t = [], Arbol()
+        P.enlazar_columnas(t, ("id",), lambda iid: "https://x/1" if iid == "fila1" else None, lambda: avisos.append(1))
+        with mock.patch("webbrowser.open") as abrir:
+            t.enl["<Motion>"](Ev(2, 5)); self.assertEqual(t.cur, "hand2")
+            t.enl["<Motion>"](Ev(1, 5)); self.assertEqual(t.cur, "")
+            t.enl["<ButtonRelease-1>"](Ev(1, 5)); abrir.assert_not_called()             # otra columna: no abre
+            t.enl["<ButtonRelease-1>"](Ev(2, 0)); abrir.assert_not_called()             # encabezado: no abre
+            t.enl["<ButtonRelease-1>"](Ev(2, 5, state=0x4)); abrir.assert_not_called()  # Ctrl: solo selecciona
+            t.enl["<ButtonRelease-1>"](Ev(2, 5)); abrir.assert_called_once_with("https://x/1")
+
+    def test_seguridad_exportes_y_enlaces(self):
+        import tempfile
+        self.assertIsNone(P.url_de({"lead": "file:///C:/Windows/System32/calc.exe"}))
+        self.assertIsNone(P.url_de({"lead": "javascript:alert(1)"}))
+        self.assertIsNone(P.url_de({"lead": "httpx://raro"}))
+        self.assertTrue(P.url_de({"lead": "HTTPS://x.bitrix24.es/crm/deal/details/1/"}))
+        ruta = os.path.join(tempfile.mkdtemp(), "e.csv")
+        P.escribir_csv(ruta, [["=HYPERLINK(\"http://x\")", "+1", "-2", "@SUMA(A1)", "normal", 1234.5, -5]])
+        with open(ruta, encoding="utf-8-sig") as f:
+            celdas = next(__import__("csv").reader(f))
+        self.assertEqual(celdas[:5], ["'=HYPERLINK(\"http://x\")", "'+1", "'-2", "'@SUMA(A1)", "normal"])
+        self.assertEqual(celdas[5:], ["1234.5", "-5"])                                   # los numeros no se tocan
+
 
 class PruebaImportar(unittest.TestCase):
     def test_json_y_repetidos(self):

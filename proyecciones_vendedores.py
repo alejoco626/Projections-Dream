@@ -915,9 +915,16 @@ def json_exportar(datos, claves, tipos, columnas, extras=()):
     return out
 
 
+def _sin_formula(v):
+    """Excel ejecuta como formula lo que empieza con = + - @ : se antepone un apostrofo a los textos (no a los numeros)."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 def escribir_csv(ruta, filas):
     with open(ruta, "w", newline="", encoding="utf-8-sig") as f:
-        csv.writer(f).writerows(filas)
+        csv.writer(f).writerows([[_sin_formula(v) for v in fila] for fila in filas])
 
 
 # ------------------------------------------------------------ importar desde Excel / CSV
@@ -943,6 +950,8 @@ def leer_xlsx(ruta):
     import zipfile
     import xml.etree.ElementTree as ET
     with zipfile.ZipFile(ruta) as z:
+        if len(z.infolist()) > 2000 or sum(i.file_size for i in z.infolist()) > 150 * 1024 * 1024:
+            raise ValueError("El archivo de Excel es demasiado grande o no es válido.")      # protege de archivos comprimidos maliciosos
         nombres = z.namelist()
         comp = []
         if "xl/sharedStrings.xml" in nombres:
@@ -3471,7 +3480,7 @@ class DialogoVendedor(tk.Toplevel):
 def url_de(r):
     """Enlace del lead si es una direccion web; si solo tiene el ID, None."""
     l = (r.get("lead") or "").strip()
-    return l if l.lower().startswith("http") else None
+    return l if re.match(r"https?://[^\s]+$", l, re.I) else None       # solo web: nunca file:// ni otros esquemas
 
 
 def etiqueta_id(r):
@@ -4242,7 +4251,6 @@ class PaginaIngreso(Pagina):
         self.editando = None
         self.sub, der = self.encabezado("Ingresar reporte")
         Boton(der, app, "Importar datos", lambda: DialogoImportar(app), "suave").pack(side="left")
-        Boton(der, app, "Exportar datos", lambda: DialogoExportar(app), "suave").pack(side="left", padx=(E(8), 0))
 
         f = Tarjeta(self, radio=14, pad=16)
         f.pack(fill="x", padx=E(24), pady=(E(6), E(10)))
@@ -4590,22 +4598,12 @@ class PaginaHistorial(Pagina):
                                      lambda: messagebox.showinfo(APP_NAME, "Este lead no tiene un enlace válido (solo tiene el ID).", parent=app))
         self.tree.bind("<Double-1>", lambda e: None if es_enlace(e) else self.editar_seleccion())
         self.tree.bind("<Delete>", lambda e: self.eliminar_seleccion())
-        self.tree.bind("<Button-3>", self.menu_contextual)
-        self.menu = tk.Menu(self, tearoff=0)
-        for t in ("perdida", "exitosa"):
-            self.menu.add_command(label="Marcar " + TIPO_LABEL[t], command=lambda t=t: self.marcar(t))
-        self.menu.add_separator()
-        self.menu.add_command(label="Editar", command=self.editar_seleccion)
-        self.menu.add_command(label="Abrir lead en el navegador", command=self.abrir_lead)
-        self.menu.add_command(label="Regresar a Seguimiento", command=self.regresar_seleccion)
-        self.menu.add_command(label="Eliminar", command=self.eliminar_seleccion)
 
         ac = tk.Frame(self, bg=BG)
         ac.pack(fill="x", padx=E(24), pady=(0, E(6)))
         for t in ("perdida", "exitosa"):
             Boton(ac, app, "Marcar " + TIPO_LABEL[t], lambda t=t: self.marcar(t), "suave").pack(side="left", padx=E(3))
         Boton(ac, app, "Editar", self.editar_seleccion, "suave").pack(side="left", padx=(E(12), E(3)))
-        Boton(ac, app, "Abrir lead", self.abrir_lead, "suave").pack(side="left", padx=E(3))
         Boton(ac, app, "Regresar a Seguimiento", self.regresar_seleccion, "suave").pack(side="left", padx=E(3))
         Boton(ac, app, "Eliminar", self.eliminar_seleccion, "suave_rojo").pack(side="left", padx=E(3))
         Boton(ac, app, "Deshacer eliminación", app.deshacer_eliminacion, "suave").pack(side="left", padx=(E(12), E(3)))
@@ -4766,23 +4764,6 @@ class PaginaHistorial(Pagina):
                 self.app.var_mes.set(MESES[int(clave[5:7]) - 1])     # el formulario guarda en el mes principal
             self.app.ir("ingreso")
             self.app.pages["ingreso"].cargar(r)
-
-    def abrir_lead(self):
-        sel = self._seleccion()
-        if not sel:
-            return
-        r = next((x for x in self.app.registros_vista if x["id"] == sel[0]), None)
-        if r and r["lead"].lower().startswith("http"):
-            webbrowser.open(r["lead"])
-        else:
-            messagebox.showinfo(APP_NAME, "Este lead no tiene un enlace válido.", parent=self.app)
-
-    def menu_contextual(self, event):
-        fila = self.tree.identify_row(event.y)
-        if fila:
-            if fila not in self.tree.selection():
-                self.tree.selection_set(fila)
-            self.menu.tk_popup(event.x_root, event.y_root)
 
 
 # ------------------------------------------------------------------------ app

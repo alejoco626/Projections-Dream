@@ -75,7 +75,17 @@ class PruebaDescarga(unittest.TestCase):
         self.assertFalse(os.path.exists(self.carpeta))
 
     def test_descarga_vacia(self):
-        self.assertEqual(self.descargar(b"", None)[-1][0], "error")
+        self.assertEqual(self.descargar(b"", "00" * 32)[-1][0], "error")
+
+    def test_sin_huella_no_se_instala(self):
+        resultado = self.descargar(self.contenido, None)       # nunca se instala algo que no se pueda verificar
+        self.assertEqual(resultado[-1][0], "error")
+        self.assertIn("huella", resultado[-1][1])
+
+    def test_archivo_demasiado_grande(self):
+        with mock.patch.object(actualizador, "TAMANO_MAXIMO", 1000):
+            resultado = self.descargar(self.contenido, hashlib.sha256(self.contenido).hexdigest())
+        self.assertEqual(resultado[-1][0], "error")
 
 
 class PruebaInstalador(unittest.TestCase):

@@ -20,6 +20,7 @@ AGENTE_HTTP = "ProjectionsDream"
 TIEMPO_CONSULTA_S = 8
 TIEMPO_DESCARGA_S = 30
 TAMANO_BLOQUE = 64 * 1024
+TAMANO_MAXIMO = 300 * 1024 * 1024        # el instalador real pesa ~14 MB; mas de esto no es el instalador
 
 
 def version_a_tupla(texto):
@@ -76,6 +77,9 @@ def hilo_descargar(info, cola):
     Envía a la cola ("progreso", leido, total), ("listo", ruta) o ("error", mensaje).
     """
     try:
+        if not info.get("sha256"):          # sin huella no hay forma de comprobar que el archivo es el publicado
+            raise ValueError("GitHub no publicó la huella de seguridad (SHA-256); por precaución no se instala sola. "
+                             "Descarga el instalador desde la página de versiones.")
         os.makedirs(CARPETA_ACTUALIZACION, exist_ok=True)
         destino = os.path.join(CARPETA_ACTUALIZACION, info["nombre"])
         parcial = destino + ".part"
@@ -90,13 +94,15 @@ def hilo_descargar(info, cola):
                 bloque = respuesta.read(TAMANO_BLOQUE)
                 if not bloque:
                     break
+                leido += len(bloque)
+                if leido > TAMANO_MAXIMO:
+                    raise ValueError("El archivo es demasiado grande para ser el instalador.")
                 archivo.write(bloque)
                 huella.update(bloque)
-                leido += len(bloque)
                 cola.put(("progreso", leido, total))
         if leido == 0:
             raise ValueError("La descarga llegó vacía.")
-        if info["sha256"] and huella.hexdigest().lower() != info["sha256"]:
+        if huella.hexdigest().lower() != info["sha256"]:
             raise ValueError("El archivo descargado no coincide con la huella publicada.")
         os.replace(parcial, destino)
         cola.put(("listo", destino))
