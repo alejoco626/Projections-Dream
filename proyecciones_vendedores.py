@@ -693,12 +693,82 @@ def _valor_campo(deal, campo, info):
     return valor if valor not in (None, False) else ""
 
 
+TIPO_PROMOCIONES = 1040     # proceso inteligente «Promociones» de Bitrix24 (respaldo si no se detecta)
+
+
+def _id_entero(v):
+    """ID numerico de un campo que puede venir como '79', 79, 79.0, '79.00' o [79]; None si no hay."""
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else None
+    try:
+        n = int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _campos_promocion(base, abrir=None):
+    """Codigos de los campos de promocion: {'utm': [...], 'seleccion': [...], 'tipo': id del proceso}."""
+    try:
+        campos = bitrix_llamar(base, "crm.deal.fields", {}, abrir).get("result") or {}
+    except Exception:
+        campos = {}
+    res = {"utm": [], "seleccion": [], "tipo": TIPO_PROMOCIONES}
+    padre, id_spa = [], []
+    for cod, inf in campos.items():
+        if not isinstance(inf, dict):
+            continue
+        nombres = [norm(inf.get(k) or "").strip() for k in ("formLabel", "listLabel", "editFormLabel", "title")]
+        if not any("promocion" in n for n in nombres):
+            continue
+        if cod.startswith("PARENT_ID_"):                # «PROMOCIONES» (UTM promo): enlace al proceso
+            padre.append(cod)
+            res["tipo"] = (inf.get("settings") or {}).get("parentEntityTypeId") or int(cod.rsplit("_", 1)[1])
+        elif any(n.startswith("seleccione") for n in nombres):
+            res["seleccion"].append(cod)                # «Seleccione Promoción»
+        elif any(n.startswith("id ") for n in nombres):
+            id_spa.append(cod)                          # «ID SPA Promocion» (UTM promo)
+    res["utm"] = padre + id_spa
+    return res
+
+
+def _nombre_promocion(base, tipo, pid, abrir=None, cache=None):
+    cache = {} if cache is None else cache
+    if pid not in cache:
+        try:
+            item = (bitrix_llamar(base, "crm.item.get", {"entityTypeId": tipo, "id": pid}, abrir).get("result") or {}).get("item") or {}
+            cache[pid] = str(item.get("title") or "").strip()
+        except Exception:
+            cache[pid] = ""
+    return cache[pid]
+
+
+def leer_promocion(base, deal, abrir=None):
+    """(campaña, aviso). Se usa la promocion del UTM; si no hay, la seleccionada.
+    El aviso dice si la seleccionada y la del UTM no coinciden."""
+    c = _campos_promocion(base, abrir)
+    utm = next((p for p in (_id_entero(deal.get(k)) for k in c["utm"]) if p), None)
+    sel = next((p for p in (_id_entero(deal.get(k)) for k in c["seleccion"]) if p), None)
+    if not utm and not sel:
+        return "", ""
+    cache = {}
+    nombre_utm = _nombre_promocion(base, c["tipo"], utm, abrir, cache) if utm else ""
+    nombre_sel = _nombre_promocion(base, c["tipo"], sel, abrir, cache) if sel else ""
+    aviso = ""
+    if utm and sel and utm != sel and norm(nombre_utm) != norm(nombre_sel):
+        aviso = "La campaña y el UTM no coinciden. Se usó el UTM; la seleccionada es «{}».".format(
+            canon_campana(nombre_sel) or sel)
+    return (nombre_utm or nombre_sel), aviso
+
+
 def leer_negociacion(cfg, did, abrir=None):
     """Lee la negociacion y devuelve lo que llena el formulario: monto, campaña y vendedor (editables despues)."""
     base, deal = bitrix_negociacion(cfg, did, abrir)
     campo = (cfg.get("campo_campana") or "auto").strip()
-    valor = ""
-    if campo.lower() in ("auto", "title"):          # el primer campo de campaña que tenga valor
+    valor, aviso_campana = leer_promocion(base, deal, abrir)
+    if valor:                                     # la promocion manda; los demas campos son de negociaciones viejas
+        campo = "PROMOCION"
+    elif campo.lower() in ("auto", "title"):          # el primer campo de campaña que tenga valor
         campo = ""
         for cod, inf in _campos_campana(base, abrir):
             valor = _valor_campo(deal, cod, inf)
@@ -731,6 +801,7 @@ def leer_negociacion(cfg, did, abrir=None):
     except (TypeError, ValueError):
         monto = 0.0
     return {"monto": monto, "monto_vacio": monto <= 0, "campana": canon_campana(valor or ""),
+            "aviso_campana": aviso_campana,
             "vendedor": vendedor, "titulo": str(deal.get("TITLE") or "")}
 
 
@@ -4049,7 +4120,10 @@ class PaginaIngreso(Pagina):
         for i, w in enumerate([self.e_fecha, self.cb_asesor, self.cb_camp, self.e_monto, self.cb_tipo]):
             w.grid(row=1, column=i, sticky="ew", padx=E(6), pady=(0, E(8)))
         tk.Label(fi, text="Enlace o ID del lead (Bitrix24)", bg=CARD, fg=MUTED, font=F["peq"]).grid(
-            row=2, column=0, columnspan=3, sticky="sw", padx=E(6), pady=(0, E(3)))
+            row=2, column=0, columnspan=2, sticky="sw", padx=E(6), pady=(0, E(3)))
+        self.lbl_camp = tk.Label(fi, text="", bg=CARD, fg=CORINTO, font=F["peq_b"], anchor="w", justify="left",
+                                 wraplength=E(240))
+        self.lbl_camp.grid(row=2, column=2, sticky="nw", padx=E(6), pady=(0, E(3)))
         self.lbl_monto = tk.Label(fi, text="", bg=CARD, fg=CORINTO, font=F["peq_b"], anchor="w", justify="left")
         self.lbl_monto.grid(row=2, column=3, sticky="nw", padx=E(6), pady=(0, E(3)))
         self.e_lead = Campo(fi, app, self.var_lead, ancho=600)
@@ -4184,7 +4258,7 @@ class PaginaIngreso(Pagina):
                 var.set(nuevos[clave])
         self._auto = nuevos
         self._aviso_did = did
-        self.aviso_monto(d["monto_vacio"])
+        self.aviso_monto(d["monto_vacio"], d.get("aviso_campana", ""))
         msg = "Leído de Bitrix24 · puedes editar los datos"
         if d["vendedor"] and not vid:
             msg += " · «{}» no está en tu lista de vendedores".format(d["vendedor"])
@@ -4193,8 +4267,9 @@ class PaginaIngreso(Pagina):
             msg = "Este lead ya está registrado en {} ({}).".format(nombre_periodo(dup[0]), TIPO_LABEL[dup[1]["tipo"]])
         self.lbl_auto.config(text=msg, fg=CORINTO if dup else AZUL_MED)
 
-    def aviso_monto(self, mostrar):
+    def aviso_monto(self, mostrar, aviso_campana=""):
         self.lbl_monto.config(text="El vendedor no colocó el monto\nen la negociación" if mostrar else "")
+        self.lbl_camp.config(text=aviso_campana)
 
     def _error(self, msg, widget):
         messagebox.showwarning(APP_NAME, msg, parent=self.app)

@@ -110,6 +110,8 @@ def _bitrix_falso(deals, campos, usuarios):
         p = dict(urllib.parse.parse_qsl(req.data.decode("utf-8")))
         if metodo == "crm.deal.fields":
             res = campos
+        elif metodo == "crm.item.get":
+            res = {"item": {"title": PROMOS.get(p.get("id"), "")}} if p.get("entityTypeId") == "1040" else {}
         elif metodo == "crm.deal.get":
             res = deals.get(p.get("id"))
         else:
@@ -125,6 +127,12 @@ CAMPOS_BITRIX = {
                  "items": [{"ID": "7", "VALUE": "VIEJA"}]},
     "UF_CRM_3": {"type": "string", "formLabel": "Campaña", "listLabel": "Campaña"},
 }
+CAMPOS_BITRIX.update({
+    "PARENT_ID_1040": {"type": "crm_entity", "title": "PROMOCIONES", "settings": {"parentEntityTypeId": 1040}},
+    "UF_CRM_9": {"type": "double", "formLabel": "ID SPA Promocion", "listLabel": "ID SPA Promocion"},
+    "UF_CRM_DEAL_DT_SELECCIONE_PROMOCION": {"type": "rest_133_dt_promo_picker", "formLabel": "Seleccione Promoción"},
+})
+PROMOS = {"139": "GUATEMALA-PERSONALIZADO", "79": "EL SALVADOR-AÑO NUEVO-2026-09-01"}
 CFG_BITRIX = {"bitrix_webhook": "https://portal.bitrix24.es/rest/1/abc/"}
 
 
@@ -152,6 +160,32 @@ class PruebaLecturaBitrix(unittest.TestCase):
         self.assertTrue(d["monto_vacio"])
 
 
+class PruebaPromocion(unittest.TestCase):
+    def leer(self, deal, cfg=CFG_BITRIX):
+        abrir = _bitrix_falso({"5": dict(deal, ID="5", TITLE="ANTONIO-SALVADOR - ELMER")}, CAMPOS_BITRIX, {})
+        return P.leer_negociacion(cfg, "5", abrir)
+
+    def test_coinciden(self):
+        d = self.leer({"PARENT_ID_1040": "139", "UF_CRM_9": "139", "UF_CRM_DEAL_DT_SELECCIONE_PROMOCION": "139",
+                       "UF_CRM_1": "913"})
+        self.assertEqual(d["campana"], "Guatemala-personalizado")
+        self.assertEqual(d["aviso_campana"], "")
+
+    def test_no_coinciden_usa_el_utm_y_avisa(self):
+        d = self.leer({"PARENT_ID_1040": "139", "UF_CRM_9": "139.00", "UF_CRM_DEAL_DT_SELECCIONE_PROMOCION": "79"})
+        self.assertEqual(d["campana"], "Guatemala-personalizado")
+        self.assertIn("no coinciden", d["aviso_campana"])
+        self.assertIn("El salvador-año nuevo-2026-09-01", d["aviso_campana"])
+
+    def test_solo_seleccionada_o_solo_id(self):
+        self.assertEqual(self.leer({"UF_CRM_DEAL_DT_SELECCIONE_PROMOCION": "79"})["campana"], "El salvador-año nuevo-2026-09-01")
+        self.assertEqual(self.leer({"UF_CRM_9": 139.0})["campana"], "Guatemala-personalizado")
+
+    def test_nunca_usa_el_titulo_si_hay_promocion(self):
+        cfg = dict(CFG_BITRIX, campo_campana="TITLE")
+        self.assertEqual(self.leer({"PARENT_ID_1040": "139"}, cfg)["campana"], "Guatemala-personalizado")
+
+
 class _Var:
     def __init__(self, v=""):
         self.v = v
@@ -174,7 +208,7 @@ class PruebaLlenadoFormulario(unittest.TestCase):
         self.f = types.SimpleNamespace(
             app=app, editando=None, _auto={}, var_lead=_Var(), var_asesor=_Var(), var_camp=_Var(), var_monto=_Var(),
             lbl_auto=types.SimpleNamespace(config=lambda **k: None),
-            aviso_monto=lambda mostrar: self.avisos.append(mostrar))
+            aviso_monto=lambda mostrar, campana="": self.avisos.append(mostrar))
 
     def leer(self, did, monto, campana, vendedor):
         self.f.var_lead.set(did)
