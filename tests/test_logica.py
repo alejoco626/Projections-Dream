@@ -5,7 +5,7 @@ import sys
 import types
 import urllib.parse
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
