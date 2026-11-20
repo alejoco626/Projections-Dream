@@ -67,7 +67,9 @@ const app = window.app = {
 };
 
 async function arrancar() {
-  S.estado = await API.estado(); Tema.paletas = S.estado.paletas; aplicarTema(S.estado.tema);
+  S.estado = await API.estado();
+  if (!S.estado || S.estado.error) { avisar('No se pudo iniciar: ' + ((S.estado && S.estado.error) || 'sin respuesta del programa'), 'Error'); return; }
+  Tema.paletas = S.estado.paletas; aplicarTema(S.estado.tema);
   app.menu(); app.periodo();
   window.addEventListener('estado', () => { app.periodo(); });
   $('#btnTema').onclick = async () => { const nuevo = Tema.nombre === 'oscuro' ? 'claro' : 'oscuro'; aplicarTema(nuevo); await API.fijar_tema(nuevo); S.estado.tema = nuevo; app.actualizarPagina(); };

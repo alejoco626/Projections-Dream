@@ -3,13 +3,14 @@ const API = (() => {
   let lista = null;
   function esperar() {
     if (lista) return lista;
-    lista = new Promise((ok) => {
-      if (window.pywebview && window.pywebview.api) return ok(true);
-      if (location.protocol === 'file:' || window.pywebview) {
-        window.addEventListener('pywebviewready', () => ok(true), { once: true });
-        return;
-      }
-      ok(false);
+    lista = new Promise(async (ok) => {
+      // Servidor de desarrollo: responde en /__dev. En la ventana real (pywebview) no existe.
+      try { const r = await fetch('/__dev', { cache: 'no-store' }); if (r.ok && (await r.text()) === 'dev') return ok(false); } catch (e) {}
+      const listo = () => window.pywebview && window.pywebview.api && Object.keys(window.pywebview.api).length > 0;
+      if (listo()) return ok(true);
+      window.addEventListener('pywebviewready', () => ok(true), { once: true });
+      const t0 = Date.now();
+      const iv = setInterval(() => { if (listo()) { clearInterval(iv); ok(true); } else if (Date.now() - t0 > 15000) { clearInterval(iv); ok(true); } }, 40);
     });
     return lista;
   }

@@ -56,6 +56,8 @@ def crear(puerto=8765, datos=None):
             self.wfile.write(cuerpo)
 
         def do_GET(self):
+            if self.path.split('?')[0] == '/__dev':
+                self.send_response(200); self.send_header('Content-Type', 'text/plain'); self.send_header('Content-Length', '3'); self.end_headers(); self.wfile.write(b'dev'); return
             ruta = self.path.split("?")[0].lstrip("/") or "index.html"
             f = os.path.normpath(os.path.join(RAIZ, ruta))
             if not f.startswith(RAIZ) or not os.path.isfile(f):
