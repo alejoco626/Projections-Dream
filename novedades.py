@@ -23,6 +23,12 @@ NOVEDADES = {
         "cambios": ["Ventana con los cambios y correcciones al terminar de actualizar"],
         "correcciones": [],
     },
+    "1.1.0": {
+        "cambios": ["Interfaz nueva con pywebview: diseño renovado, tema claro y oscuro, animaciones suaves y rápidas",
+                    "Esqueletos de carga mientras se llena cada pantalla",
+                    "Gráficas que se ajustan al tamaño de la ventana"],
+        "correcciones": ["Tus datos y copias se conservan igual: siguen en la misma carpeta"],
+    },
 }
 
 SECCIONES = (("cambios", "Cambios", "-"), ("correcciones", "Correcciones", "*"))
