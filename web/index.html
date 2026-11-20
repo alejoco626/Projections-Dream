@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proyecciones de Vendedores</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app" class="app">
+  <aside class="side" id="side">
+    <div class="marca">
+      <div class="marca-logo" aria-hidden="true">
+        <svg viewBox="0 0 40 40" width="34" height="34"><rect width="40" height="40" rx="11" fill="rgba(255,255,255,.12)"/><path d="M9 28 L16 19 L21 23 L31 11" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="31" cy="11" r="3" fill="#E5A0AC"/></svg>
+      </div>
+      <div><div class="marca-t">Proyecciones</div><div class="marca-s">de vendedores</div></div>
+    </div>
+    <div class="side-bloque">
+      <div class="side-et">Periodo</div>
+      <div class="sel-meses" id="selMeses"></div>
+      <div class="sel-anio"><select id="selAnio" aria-label="Año"></select></div>
+    </div>
+    <nav class="menu" id="menu" aria-label="Secciones"></nav>
+    <div class="side-pie">
+      <div class="side-et">Apariencia</div>
+      <button class="tema" id="btnTema" role="switch" aria-checked="false" aria-label="Modo oscuro"><span class="tema-sol">☀</span><span class="tema-luna">☾</span><i></i></button>
+      <div class="guardado" id="guardado">Guardado automático</div>
+    </div>
+  </aside>
+  <section class="main">
+    <div class="vista" id="vista" tabindex="-1"></div>
+  </section>
+</div>
+<div id="modales"></div>
+<div id="toasts" aria-live="polite"></div>
+<script src="api.js"></script>
+<script src="ui.js"></script>
+<script src="charts.js"></script>
+<script src="paginas.js"></script>
+<script src="dialogos.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

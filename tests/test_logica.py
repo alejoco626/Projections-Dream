@@ -2,14 +2,13 @@ import io
 import json
 import os
 import sys
-import types
 import urllib.parse
 import unittest
 from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import proyecciones_vendedores as P  # noqa: E402
+import nucleo as P  # noqa: E402
 
 
 def datos_base():
@@ -69,46 +68,6 @@ class PruebaMetas(unittest.TestCase):
         self.assertIsNone(P.url_de(sin))
         self.assertEqual(P.etiqueta_id(con), "↗ 777")
         self.assertEqual(P.etiqueta_id(sin), "888")
-
-    def test_hipervinculos_de_tabla(self):
-        """El clic abre el navegador solo en las columnas de enlace, y Ctrl/Mayus solo selecciona."""
-        from unittest import mock
-
-        class Arbol:
-            def __init__(self):
-                self.enl, self.cur = {}, ""
-
-            def bind(self, ev, fn, add=None):
-                self.enl[ev] = fn
-
-            def configure(self, **kw):
-                self.cur = kw.get("cursor", self.cur)
-
-            def __getitem__(self, k):
-                return ("n", "id", "lead")
-
-            def identify_region(self, x, y):
-                return "cell" if y > 0 else "heading"
-
-            def identify_column(self, x):
-                return "#2" if x == 2 else "#1"
-
-            def identify_row(self, y):
-                return "fila1" if y > 0 else ""
-
-        class Ev:
-            def __init__(self, x, y, state=0):
-                self.x, self.y, self.state = x, y, state
-
-        avisos, t = [], Arbol()
-        P.enlazar_columnas(t, ("id",), lambda iid: "https://x/1" if iid == "fila1" else None, lambda: avisos.append(1))
-        with mock.patch("webbrowser.open") as abrir:
-            t.enl["<Motion>"](Ev(2, 5)); self.assertEqual(t.cur, "hand2")
-            t.enl["<Motion>"](Ev(1, 5)); self.assertEqual(t.cur, "")
-            t.enl["<ButtonRelease-1>"](Ev(1, 5)); abrir.assert_not_called()             # otra columna: no abre
-            t.enl["<ButtonRelease-1>"](Ev(2, 0)); abrir.assert_not_called()             # encabezado: no abre
-            t.enl["<ButtonRelease-1>"](Ev(2, 5, state=0x4)); abrir.assert_not_called()  # Ctrl: solo selecciona
-            t.enl["<ButtonRelease-1>"](Ev(2, 5)); abrir.assert_called_once_with("https://x/1")
 
     def test_seguridad_exportes_y_enlaces(self):
         import tempfile
@@ -261,51 +220,6 @@ class PruebaPromocion(unittest.TestCase):
     def test_nunca_usa_el_titulo_si_hay_promocion(self):
         cfg = dict(CFG_BITRIX, campo_campana="TITLE")
         self.assertEqual(self.leer({"PARENT_ID_1040": "139"}, cfg)["campana"], "Guatemala-personalizado")
-
-
-class _Var:
-    def __init__(self, v=""):
-        self.v = v
-
-    def get(self):
-        return self.v
-
-    def set(self, v):
-        self.v = v
-
-
-class PruebaLlenadoFormulario(unittest.TestCase):
-    """Una lectura nueva reemplaza lo que lleno la anterior, aunque ahora venga vacio."""
-
-    def setUp(self):
-        app = types.SimpleNamespace(
-            datos={"vendedores": [{"id": "v1", "nombre": "Josue"}, {"id": "v2", "nombre": "Elmer"}], "periodos": {}},
-            nombre=lambda vid: {"v1": "Josue", "v2": "Elmer"}[vid])
-        self.avisos = []
-        self.f = types.SimpleNamespace(
-            app=app, editando=None, _auto={}, var_lead=_Var(), var_asesor=_Var(), var_camp=_Var(), var_monto=_Var(),
-            lbl_auto=types.SimpleNamespace(config=lambda **k: None),
-            aviso_monto=lambda mostrar, campana="": self.avisos.append(mostrar))
-
-    def leer(self, did, monto, campana, vendedor):
-        self.f.var_lead.set(did)
-        res = {"ok": {"monto": monto, "monto_vacio": monto <= 0, "campana": campana, "vendedor": vendedor, "titulo": ""}}
-        P.PaginaIngreso.aplicar_lectura(self.f, did, res)
-
-    def test_no_arrastra_datos_de_la_negociacion_anterior(self):
-        self.leer("1", 990.0, "Panamá", "Josue Muñoz")
-        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get(), self.f.var_asesor.get()), ("990.00", "Panamá", "Josue"))
-        self.assertEqual(self.avisos[-1], False)
-        self.leer("2", 0.0, "", "Elmer Aceituno")
-        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get(), self.f.var_asesor.get()), ("", "", "Elmer"))
-        self.assertEqual(self.avisos[-1], True)
-
-    def test_respeta_lo_escrito_a_mano(self):
-        self.leer("1", 990.0, "Panamá", "Josue Muñoz")
-        self.f.var_monto.set("1200")
-        self.f.var_camp.set("Mi campaña")
-        self.leer("2", 0.0, "", "Josue Muñoz")
-        self.assertEqual((self.f.var_monto.get(), self.f.var_camp.get()), ("1200", "Mi campaña"))
 
 
 if __name__ == "__main__":

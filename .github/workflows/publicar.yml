@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        run: pip install pyinstaller
+        run: pip install pyinstaller pywebview
 
       - name: Ejecutar pruebas
         run: python -m unittest discover -s tests -t . -v
@@ -36,7 +36,21 @@ jobs:
           --name Projections_Dream
           --icon Proyecciones_Dream.ico
           --add-data "Proyecciones_Dream.ico;."
-          proyecciones_vendedores.py
+          --add-data "web;web"
+          --collect-all webview
+          --collect-all pythonnet
+          --collect-all clr_loader
+          app_web.py
+
+      - name: Probar que la ventana abre y dibuja el panel
+        shell: pwsh
+        run: |
+          $datos = Join-Path $env:RUNNER_TEMP "prueba_datos.json"
+          $res = Join-Path $env:RUNNER_TEMP "prueba_resultado.txt"
+          $p = Start-Process -FilePath "dist/Projections_Dream.exe" -ArgumentList "--datos","`"$datos`"","--autoprueba=`"$res`"" -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "La ventana no respondio en 2 minutos."; exit 1 }
+          if (Test-Path $res) { Get-Content $res }
+          if ($p.ExitCode -ne 0) { Write-Error "La prueba de la ventana fallo."; exit 1 }
 
       - name: Instalar Inno Setup
         run: choco install innosetup -y --no-progress

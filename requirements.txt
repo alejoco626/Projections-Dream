@@ -1,1 +1,3 @@
-# El programa usa solo la biblioteca estandar de Python; no hay dependencias.
+# Para ejecutar desde el codigo fuente:  pip install -r requirements.txt   y luego   python app_web.py
+# (La interfaz es HTML/CSS/JS dentro de una ventana pywebview; en Windows usa el WebView2 de Microsoft Edge.)
+pywebview>=5.0

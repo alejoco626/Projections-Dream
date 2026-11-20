@@ -4,26 +4,34 @@ Aplicación de escritorio (Windows) de Dream & Travel para registrar las proyecc
 y medirlas contra sus metas: panel con anillos y semanas, proyección necesaria, embudos, campañas,
 historial, importar/exportar (Excel, CSV, JSON), lectura de leads desde Bitrix24 y reportes en PDF.
 
-Usa solo la biblioteca estándar de Python (Tkinter). Los datos se guardan en tu computadora, en
+La interfaz es HTML/CSS/JS dentro de una ventana **pywebview** (en Windows usa el WebView2 de Microsoft Edge,
+que ya viene con Windows 11 y con Edge actualizado). Los datos se guardan en tu computadora, en
 `C:\Users\<usuario>\ProyeccionesVendedores\datos.json`, con copias diarias en la carpeta `copias`.
 Las actualizaciones **nunca** tocan esos datos.
 
 ## Desarrollo
 
 ```bash
-python proyecciones_vendedores.py            # abrir la aplicación
-python -m unittest discover -s tests -t .    # pruebas (no requieren pantalla para la lógica)
+pip install -r requirements.txt              # una sola vez (pywebview)
+python app_web.py                            # abrir la aplicación
+python dev_server.py                         # la misma interfaz en el navegador (http://127.0.0.1:8765/), para programar/probar
+python -m unittest discover -s tests -t .    # pruebas (no requieren pantalla)
 ```
 
 | Archivo | Contenido |
 | --- | --- |
-| `proyecciones_vendedores.py` | Aplicación completa (lógica, PDF, interfaz) y `VERSION_APP` |
+| `nucleo.py` | Toda la lógica (metas, reportes, Bitrix24, importar/exportar, PDF, paleta) sin interfaz, y `VERSION_APP` |
+| `servicio.py` | El estado de la app (meses, semana, guardado, deshacer…) con métodos que devuelven JSON |
+| `api.py` | Puente con la ventana: lista cerrada de métodos que la página puede llamar |
+| `app_web.py` | Abre la ventana pywebview, diálogos de archivo, aviso si falta WebView2 |
+| `web/` | La interfaz: `index.html`, `styles.css` (diseño y animaciones), `charts.js` (gráficas SVG), `paginas.js`, `dialogos.js`, `app.js` |
+| `dev_server.py` | Servidor local solo para desarrollo (no va dentro del `.exe`) |
 | `novedades.py` | Notas de cada versión para la ventana «Actualización» |
 | `actualizador.py` | Búsqueda, descarga (con SHA-256) e instalación de versiones nuevas desde GitHub Releases |
 | `poner_version.py` | Escribe la versión de la etiqueta dentro del programa al publicar |
 | `instalador.iss` | Instalador de Inno Setup (el `AppId` no debe cambiar jamás) |
-| `.github/workflows/publicar.yml` | Pruebas, compilación con PyInstaller, instalador y release automáticos |
-| `tests/` | Pruebas de la lógica y del actualizador |
+| `.github/workflows/publicar.yml` | Pruebas, compilación con PyInstaller, prueba de que la ventana abre, instalador y release |
+| `tests/` | Pruebas de la lógica, del servicio/API y del actualizador |
 
 ## Publicar una versión nueva (actualización automática)
 
